@@ -1,0 +1,176 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101827">
+  <title>Campus Emergency Response</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#">
+      <span class="brand-icon">✚</span>
+      <span>Campus<span class="muted">Response</span></span>
+    </a>
+    <div class="header-right">
+      <span id="user-label">Not signed in</span>
+      <button id="logout-button" class="button secondary hidden">Log out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">CAMPUS SAFETY PLATFORM</p>
+        <h1>Emergency response,<br><span class="accent">connected.</span></h1>
+        <p class="hero-copy">
+          Report incidents, track response progress and help make campus safer.
+        </p>
+      </div>
+      <div class="hero-symbol" aria-hidden="true">✚</div>
+    </section>
+
+    <div id="notice" class="notice hidden" role="status"></div>
+
+    <section id="auth-section" class="panel auth-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">GET STARTED</p>
+          <h2>Welcome</h2>
+        </div>
+        <span class="status-dot">● Secure access</span>
+      </div>
+
+      <div class="tabs">
+        <button id="login-tab" class="tab active" type="button">Sign in</button>
+        <button id="register-tab" class="tab" type="button">Create account</button>
+      </div>
+
+      <form id="auth-form">
+        <label id="name-label" class="hidden" for="name">Full name</label>
+        <input id="name" class="hidden" name="name" autocomplete="name"
+               placeholder="Your full name">
+
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="username"
+               placeholder="you@example.com" required>
+
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password"
+               autocomplete="current-password" minlength="8"
+               placeholder="Enter your password" required>
+
+        <button id="auth-submit" class="button primary full" type="submit">
+          Sign in
+        </button>
+      </form>
+      <p class="hint">Use your test account to explore the local prototype.</p>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="section-heading dashboard-heading">
+        <div>
+          <p class="eyebrow">OVERVIEW</p>
+          <h2>Incident dashboard</h2>
+        </div>
+        <button id="refresh-button" class="button secondary" type="button">
+          ↻ Refresh
+        </button>
+      </div>
+
+      <div class="stats">
+        <article class="stat-card">
+          <span>Total incidents</span>
+          <strong id="total-count">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Reported</span>
+          <strong id="reported-count">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>In progress</span>
+          <strong id="progress-count">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Resolved</span>
+          <strong id="resolved-count">0</strong>
+        </article>
+      </div>
+
+      <div class="content-grid">
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">NEW REPORT</p>
+              <h2>Report an incident</h2>
+            </div>
+          </div>
+
+          <form id="incident-form">
+            <label for="title">Incident title</label>
+            <input id="title" name="title" maxlength="150"
+                   placeholder="e.g. Medical assistance required" required>
+
+            <label for="category">Category</label>
+            <select id="category" name="category" required>
+              <option value="Medical">Medical</option>
+              <option value="Fire">Fire</option>
+              <option value="Security">Security</option>
+              <option value="Infrastructure">Infrastructure</option>
+              <option value="Other">Other</option>
+            </select>
+
+            <label for="location">Location on campus</label>
+            <input id="location" name="location" maxlength="200"
+                   placeholder="e.g. Central Library" required>
+
+            <label for="priority">Priority</label>
+            <select id="priority" name="priority" required>
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+
+            <label for="description">Description</label>
+            <textarea id="description" name="description" rows="4"
+                      maxlength="3000" placeholder="Describe what happened..."
+                      required></textarea>
+
+            <button class="button primary full" type="submit">
+              Submit incident
+            </button>
+          </form>
+          <p class="hint">
+            Prototype only. For a real emergency, contact campus security or
+            local emergency services directly.
+          </p>
+        </section>
+
+        <section class="panel incidents-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">LIVE RECORDS</p>
+              <h2>Incident reports</h2>
+            </div>
+            <span id="incident-count" class="count-pill">0 records</span>
+          </div>
+
+          <div id="incident-list" class="incident-list">
+            <div class="empty-state">Loading incidents…</div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <footer>
+      <span>Campus Response · Academic project prototype</span>
+      <span>Cloud-ready architecture</span>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
