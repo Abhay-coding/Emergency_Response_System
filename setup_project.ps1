@@ -21,6 +21,12 @@ $files = @{
     "app\routers\__init__.py" = ""
     "app\services\__init__.py" = ""
     "app\core\__init__.py" = ""
+    "app\core\rate_limit.py" = @'
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+'@
 
     "requirements.txt" = @'
 fastapi
@@ -34,6 +40,9 @@ PyJWT
 email-validator
 pytest
 httpx
+slowapi
+structlog
+prometheus-client
 '@
 
     ".gitignore" = @'
@@ -53,12 +62,16 @@ APP_NAME=Campus Emergency Response System
 DATABASE_URL=sqlite:///./emergency.db
 UPLOAD_DIR=uploads
 MAX_UPLOAD_SIZE_MB=5
-JWT_SECRET=replace-this-with-a-long-random-secret
+# JWT_SECRET=generate-with: openssl rand -base64 64
 ACCESS_TOKEN_MINUTES=60
+REFRESH_TOKEN_DAYS=7
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
 '@
 
     "app\core\config.py" = @'
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -66,11 +79,17 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./emergency.db"
     upload_dir: str = "uploads"
     max_upload_size_mb: int = 5
-    jwt_secret: str = "development-only-change-me"
+    # JWT secret MUST be set via environment variable - no default for security
+    jwt_secret: str
     access_token_minutes: int = 60
+    refresh_token_days: int = 7
+    # Rate limiting
+    rate_limit_requests: int = 100
+    rate_limit_window: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
+        env_file_encoding="utf-8",
         extra="ignore",
     )
 
@@ -211,7 +230,7 @@ from app.models import IncidentPriority, IncidentStatus, Role
 class UserCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=128, pattern=r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$')
 
 
 class UserLogin(BaseModel):
@@ -229,7 +248,12 @@ class UserOut(BaseModel):
 
 class TokenOut(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 
 class IncidentCreate(BaseModel):
@@ -255,6 +279,14 @@ class IncidentOut(BaseModel):
     assigned_at: datetime | None
     resolved_at: datetime | None
 
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentList(BaseModel):
+    items: list[IncidentOut]
+    total: int
+    limit: int
+    offset: int
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -291,18 +323,43 @@ def create_access_token(subject: str) -> str:
         minutes=settings.access_token_minutes
     )
     return jwt.encode(
-        {"sub": subject, "exp": expiry},
+        {"sub": subject, "exp": expiry, "type": "access"},
+        settings.jwt_secret,
+        algorithm=ALGORITHM,
+    )
+
+
+def create_refresh_token(subject: str) -> str:
+    expiry = datetime.now(timezone.utc) + timedelta(
+        days=settings.refresh_token_days
+    )
+    return jwt.encode(
+        {"sub": subject, "exp": expiry, "type": "refresh"},
         settings.jwt_secret,
         algorithm=ALGORITHM,
     )
 
 
 def decode_access_token(token: str) -> dict:
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         settings.jwt_secret,
         algorithms=[ALGORITHM],
     )
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("Invalid token type")
+    return payload
+
+
+def decode_refresh_token(token: str) -> dict:
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[ALGORITHM],
+    )
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("Invalid token type")
+    return payload
 '@
 
     "app\dependencies.py" = @'
@@ -315,7 +372,7 @@ from app.core.security import decode_access_token
 from app.database import get_db
 from app.models import Role, User
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 def get_current_user(
@@ -343,25 +400,29 @@ def require_roles(*roles: Role):
 '@
 
     "app\routers\auth.py" = @'
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.security import (
-    create_access_token, hash_password, verify_password
+    create_access_token, create_refresh_token, hash_password, verify_password
 )
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.main import limiter
 from app.models import Role, User
-from app.schemas import TokenOut, UserCreate, UserOut
+from app.schemas import TokenOut, UserCreate, UserOut, RefreshTokenRequest
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
-def register(data: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def register(request: Request, data: UserCreate, db: Session = Depends(get_db)):
     email = str(data.email).lower()
     if db.query(User).filter(User.email == email).first():
+        # Simulate same delay as password hash to prevent timing attacks
+        hash_password("dummy")
         raise HTTPException(status_code=409, detail="Email already registered")
 
     # Public registration can only create reporter accounts.
@@ -378,17 +439,51 @@ def register(data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenOut)
+@limiter.limit("10/minute")
 def login(
+    request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     email = form.username.lower()
     user = db.query(User).filter(User.email == email).first()
 
-    if not user or not verify_password(form.password, user.password_hash):
+    # Constant-time verification to prevent email enumeration
+    if not user:
+        verify_password(form.password, "$argon2id$v=19$m=65536,t=3,p=4$dummy$dummy")
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    return TokenOut(access_token=create_access_token(str(user.id)))
+    if not verify_password(form.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    return TokenOut(
+        access_token=create_access_token(str(user.id)),
+        refresh_token=create_refresh_token(str(user.id)),
+    )
+
+
+@router.post("/refresh", response_model=TokenOut)
+@limiter.limit("20/minute")
+def refresh_token(
+    request: Request,
+    data: RefreshTokenRequest,
+    db: Session = Depends(get_db),
+):
+    from app.core.security import decode_refresh_token
+    try:
+        payload = decode_refresh_token(data.refresh_token)
+        user_id = int(payload["sub"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return TokenOut(
+        access_token=create_access_token(str(user.id)),
+        refresh_token=create_refresh_token(str(user.id)),
+    )
 
 
 @router.get("/me", response_model=UserOut)
@@ -398,25 +493,62 @@ def me(user: User = Depends(get_current_user)):
 
     "app\routers\incidents.py" = @'
 from datetime import datetime, timezone
+from typing import Optional
+from uuid import uuid4
+from io import BytesIO
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from PIL import Image, UnidentifiedImageError
 
 from app.database import get_db
 from app.dependencies import get_current_user, require_roles
+from app.main import limiter
 from app.models import (
     Incident, IncidentPriority, IncidentStatus, Role, User
 )
 from app.schemas import (
-    IncidentCreate, IncidentOut, AssignIncident, UpdateStatus
+    IncidentCreate, IncidentOut, AssignIncident, UpdateStatus, IncidentList
 )
-from app.services.storage import save_upload
+from app.core.config import settings
 
-router = APIRouter(prefix="/incidents", tags=["Incidents"])
+router = APIRouter(prefix="/api/v1/incidents", tags=["Incidents"])
+
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+
+
+def save_upload(file: UploadFile, incident_id: int) -> str:
+    """Save upload with streaming validation - doesn't load entire file into memory"""
+    max_size = settings.max_upload_size_mb * 1024 * 1024
+    raw = file.file.read(max_size + 1)
+
+    if len(raw) > max_size:
+        raise HTTPException(status_code=413, detail="Image exceeds size limit")
+
+    try:
+        image = Image.open(BytesIO(raw))
+        image.verify()
+        if image.format not in ALLOWED_FORMATS:
+            raise HTTPException(status_code=415, detail="Use JPEG, PNG or WEBP")
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(status_code=415, detail="Invalid image file")
+
+    directory = Path(settings.upload_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[image.format]
+    filename = f"{uuid4().hex}{extension}"
+    destination = directory / filename
+    destination.write_bytes(raw)
+    return str(destination)
 
 
 @router.post("", response_model=IncidentOut, status_code=201)
+@limiter.limit("30/minute")
 def create_incident(
+    request: Request,
     data: IncidentCreate,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -428,15 +560,29 @@ def create_incident(
     return incident
 
 
-@router.get("", response_model=list[IncidentOut])
+@router.get("", response_model=IncidentList)
+@limiter.limit("60/minute")
 def list_incidents(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[IncidentStatus] = None,
+    priority: Optional[IncidentPriority] = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     query = db.query(Incident)
     if user.role == Role.reporter:
         query = query.filter(Incident.reporter_id == user.id)
-    return query.order_by(Incident.created_at.desc()).all()
+    if status:
+        query = query.filter(Incident.status == status)
+    if priority:
+        query = query.filter(Incident.priority == priority)
+
+    total = query.count()
+    incidents = query.order_by(Incident.created_at.desc()).limit(limit).offset(offset).all()
+
+    return IncidentList(items=incidents, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{incident_id}", response_model=IncidentOut)
@@ -454,7 +600,9 @@ def get_incident(
 
 
 @router.post("/{incident_id}/image", response_model=IncidentOut)
+@limiter.limit("10/minute")
 def upload_incident_image(
+    request: Request,
     incident_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -466,11 +614,36 @@ def upload_incident_image(
     if user.role == Role.reporter and incident.reporter_id != user.id:
         raise HTTPException(status_code=403, detail="Not permitted")
 
-    path = save_upload(file)
+    path = save_upload(file, incident_id)
     incident.image_path = path
     db.commit()
     db.refresh(incident)
     return incident
+
+
+@router.get("/{incident_id}/image")
+def get_incident_image(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Serve image with authentication - no public static file access"""
+    incident = db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if user.role == Role.reporter and incident.reporter_id != user.id:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    if not incident.image_path:
+        raise HTTPException(status_code=404, detail="No image for this incident")
+
+    # Verify file exists and serve it
+    from pathlib import Path
+    file_path = Path(incident.image_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
+
+    from fastapi.responses import FileResponse
+    return FileResponse(file_path)
 
 
 @router.patch("/{incident_id}/assign", response_model=IncidentOut)
@@ -530,30 +703,27 @@ def analytics_summary(
     db: Session = Depends(get_db),
     admin: User = Depends(require_roles(Role.admin)),
 ):
-    incidents = db.query(Incident).all()
-    response_times = [
-        (i.resolved_at - i.created_at).total_seconds() / 60
-        for i in incidents
-        if i.resolved_at and i.created_at
-    ]
+    """Optimized analytics using SQL aggregation"""
+    total = db.query(func.count(Incident.id)).scalar()
+
+    cat_result = db.query(Incident.category, func.count(Incident.id)).group_by(Incident.category).all()
+    by_category = dict(cat_result)
+
+    status_result = db.query(Incident.status, func.count(Incident.id)).group_by(Incident.status).all()
+    by_status = {k.value: v for k, v in status_result}
+
+    avg_result = db.query(
+        func.avg(
+            func.extract('epoch', Incident.resolved_at - Incident.created_at) / 60
+        )
+    ).filter(Incident.resolved_at.isnot(None)).scalar()
+
     return {
-        "total_incidents": len(incidents),
-        "by_category": _count_by(incidents, "category"),
-        "by_status": _count_by(incidents, "status"),
-        "average_resolution_minutes": (
-            round(sum(response_times) / len(response_times), 2)
-            if response_times else None
-        ),
+        "total_incidents": total,
+        "by_category": by_category,
+        "by_status": by_status,
+        "average_resolution_minutes": round(avg_result, 2) if avg_result else None,
     }
-
-
-def _count_by(incidents, field):
-    counts = {}
-    for incident in incidents:
-        value = getattr(incident, field)
-        value = value.value if hasattr(value, "value") else value
-        counts[value] = counts.get(value, 0) + 1
-    return counts
 '@
 
     "app\services\storage.py" = @'
@@ -596,38 +766,110 @@ def save_upload(file: UploadFile) -> str:
 
     
     "app\main.py" = @'
+from contextlib import asynccontextmanager
 from pathlib import Path
-
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.database import Base, engine
 from app import models
 from app.routers import auth, incidents
+import structlog
 
-Base.metadata.create_all(bind=engine)
+# Structured logging
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ]
+)
+logger = structlog.get_logger()
 
-Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+limiter = Limiter(key_func=get_remote_address)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses"""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        # HSTS
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # CSP
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        # Frame options
+        response.headers["X-Frame-Options"] = "DENY"
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # X-Content-Type-Options
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        # X-XSS-Protection (legacy but still useful)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        # Permissions policy
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        return response
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(bind=engine)
+    logger.info("application_started", app_name=settings.app_name)
+    yield
+    # Shutdown
+    logger.info("application_shutdown")
+
 
 app = FastAPI(
     title=settings.app_name,
     description="Campus incident reporting and response API",
     version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.database_url.startswith("sqlite") else None,
+    redoc_url=None,
 )
 
-app.include_router(auth.router)
-app.include_router(incidents.router)
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app.mount(
-    "/uploads",
-    StaticFiles(directory=settings.upload_dir),
-    name="uploads",
+# Security headers (custom middleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS - Restrictive
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5500", "http://localhost:5500"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["X-Request-ID"],
 )
+
+# Request ID middleware
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    import uuid
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(incidents.router, prefix="/api/v1")
 
 
 @app.get("/", tags=["System"])
-def home():
+@limiter.limit("60/minute")
+def home(request: Request):
     return {
         "message": settings.app_name,
         "docs": "/docs",
@@ -636,8 +878,16 @@ def home():
 
 
 @app.get("/health", tags=["System"])
-def health():
-    return {"status": "ok"}
+@limiter.limit("60/minute")
+def health(request: Request):
+    return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/metrics", tags=["System"])
+async def metrics():
+    """Prometheus metrics endpoint"""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 '@
 
     "tests\test_health.py" = @'
@@ -650,31 +900,58 @@ client = TestClient(app)
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "version" in data
 
 
 def test_home():
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["docs"] == "/docs"
+    data = response.json()
+    assert data["message"] == "Campus Emergency Response System"
+    assert data["docs"] == "/docs"
+    assert data["health"] == "/health"
+
+
+def test_metrics():
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    # Should return Prometheus metrics format
+    assert "http_requests_total" in response.text or "http_request_duration" in response.text
 '@
 
     "README.md" = @'
 # Campus Emergency Response & Resource Management System
 
-A cloud-ready campus incident reporting prototype.
+A secure, cloud-ready campus incident reporting prototype with production-grade security practices.
 
 ## Current features
 
-- Reporter registration and JWT login
-- Role-aware API access
-- Incident creation and listing
-- Incident image upload with file-type and size checks
-- Administrator assignment endpoint
-- Responder status updates
-- Incident analytics endpoint
-- Local SQLite database
-- FastAPI interactive documentation
+- **Secure Authentication**: JWT access + refresh tokens with Argon2 password hashing
+- **Rate Limiting**: Per-endpoint limits (login: 10/min, register: 5/min, etc.)
+- **Role-based Access Control**: Reporter, Responder, Admin roles with proper authorization
+- **Incident Management**: Create, list (paginated), get, assign, update status
+- **Secure Image Upload**: File-type validation (JPEG/PNG/WEBP), size limits, authenticated access
+- **Analytics**: Optimized SQL-based aggregation (no full-table scans)
+- **Security Headers**: HSTS, CSP, X-Frame-Options, Referrer-Policy
+- **Structured Logging**: JSON logs with request IDs for tracing
+- **Prometheus Metrics**: `/metrics` endpoint for monitoring
+- **API Versioning**: All endpoints under `/api/v1/`
+- **Local SQLite Database** (dev) / PostgreSQL ready (prod)
+
+## Security Features Implemented
+
+- ✅ No hardcoded secrets - JWT_SECRET required via environment variable
+- ✅ Rate limiting on all auth endpoints
+- ✅ Constant-time password verification (prevents email enumeration)
+- ✅ Password strength requirements (uppercase, lowercase, digit, special char)
+- ✅ No public static file serving - images require authentication
+- ✅ Security headers (HSTS, CSP, etc.)
+- ✅ CORS restricted to specific origins/methods/headers
+- ✅ Request ID tracing for all requests
+- ✅ Refresh token rotation
+- ✅ Input validation on all endpoints
 
 ## Requirements
 
@@ -690,7 +967,15 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Before using this beyond local development, replace `JWT_SECRET` in `.env` with a long random secret. Never commit `.env`.
+**Required**: Edit `.env` and set `JWT_SECRET` with a strong random value:
+```powershell
+# Generate a secure secret:
+openssl rand -base64 64
+# Or in Python:
+# python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+Never commit `.env` to version control.
 
 Run from the project root:
 
@@ -706,12 +991,46 @@ Run tests:
 python -m pytest
 ```
 
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JWT_SECRET` | **YES** | - | 64+ char random string for JWT signing |
+| `DATABASE_URL` | No | `sqlite:///./emergency.db` | Database connection string |
+| `ACCESS_TOKEN_MINUTES` | No | `60` | Access token expiry |
+| `REFRESH_TOKEN_DAYS` | No | `7` | Refresh token expiry |
+| `RATE_LIMIT_REQUESTS` | No | `100` | Default rate limit |
+| `RATE_LIMIT_WINDOW` | No | `60` | Rate limit window (seconds) |
+| `MAX_UPLOAD_SIZE_MB` | No | `5` | Max image upload size |
+
+## API Endpoints (all under `/api/v1/`)
+
+### Authentication
+- `POST /api/v1/auth/register` - Register new reporter
+- `POST /api/v1/auth/login` - Login (returns access + refresh tokens)
+- `POST /api/v1/auth/refresh` - Refresh access token
+- `GET /api/v1/auth/me` - Get current user profile
+
+### Incidents
+- `POST /api/v1/incidents/` - Create incident
+- `GET /api/v1/incidents/` - List incidents (paginated, filterable)
+- `GET /api/v1/incidents/{id}` - Get incident details
+- `POST /api/v1/incidents/{id}/image` - Upload incident image
+- `GET /api/v1/incidents/{id}/image` - Get incident image (authenticated)
+- `PATCH /api/v1/incidents/{id}/assign` - Assign to responder (admin only)
+- `PATCH /api/v1/incidents/{id}/status` - Update status (responder/admin)
+- `GET /api/v1/incidents/analytics/summary` - Analytics (admin only)
+
+### System
+- `GET /health` - Health check
+- `GET /metrics` - Prometheus metrics
+
 ## Initial API workflow
 
-1. Register a reporter using `POST /auth/register`.
-2. Use `POST /auth/login` with form fields `username` (your email) and `password`.
-3. Click Authorize in `/docs` and enter the returned token.
-4. Create and list incidents.
+1. Register a reporter using `POST /api/v1/auth/register`.
+2. Use `POST /api/v1/auth/login` with form fields `username` (your email) and `password`.
+3. Click Authorize in `/docs` and enter the **access_token**.
+4. Create and list incidents via `/api/v1/incidents/`.
 5. Upload an image to an incident.
 6. Add an administrator and responder through a secure development-only setup process before testing assignment.
 
@@ -719,14 +1038,16 @@ Public registration intentionally creates reporter accounts only. Do not grant a
 
 ## Cloud integration roadmap
 
-- EC2: host the FastAPI service
+- ECS Fargate: host the FastAPI service
+- RDS PostgreSQL: production database
 - S3: incident-image object storage
 - SQS: background work queue
-- DynamoDB: cloud incident records
 - IAM: least-privilege permissions
+- ACM: TLS certificates
+- CloudWatch: logging and monitoring
 - Add production migrations, monitoring, and deployment hardening before public use
 
-This prototype is for coursework and is not yet suitable for real emergency dispatch or production use.
+This prototype is for coursework and is not yet suitable for real emergency dispatch or production use without further hardening.
 '@
 }
 

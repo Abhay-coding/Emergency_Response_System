@@ -22,15 +22,40 @@ def create_access_token(subject: str) -> str:
         minutes=settings.access_token_minutes
     )
     return jwt.encode(
-        {"sub": subject, "exp": expiry},
+        {"sub": subject, "exp": expiry, "type": "access"},
+        settings.jwt_secret,
+        algorithm=ALGORITHM,
+    )
+
+
+def create_refresh_token(subject: str) -> str:
+    expiry = datetime.now(timezone.utc) + timedelta(
+        days=settings.refresh_token_days
+    )
+    return jwt.encode(
+        {"sub": subject, "exp": expiry, "type": "refresh"},
         settings.jwt_secret,
         algorithm=ALGORITHM,
     )
 
 
 def decode_access_token(token: str) -> dict:
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         settings.jwt_secret,
         algorithms=[ALGORITHM],
     )
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("Invalid token type")
+    return payload
+
+
+def decode_refresh_token(token: str) -> dict:
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[ALGORITHM],
+    )
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("Invalid token type")
+    return payload

@@ -9,3 +9,6 @@ PyJWT
 email-validator
 pytest
 httpx
+slowapi
+structlog
+prometheus-client

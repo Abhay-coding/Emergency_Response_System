@@ -1,5 +1,5 @@
 ﻿from datetime import datetime
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models import IncidentPriority, IncidentStatus, Role
 
@@ -8,6 +8,21 @@ class UserCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator('password')
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """Validate password has uppercase, lowercase, digit, and special char"""
+        import re
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[@$!%*?&]', v):
+            raise ValueError('Password must contain at least one special character (@$!%*?&)')
+        return v
 
 
 class UserLogin(BaseModel):
@@ -25,7 +40,12 @@ class UserOut(BaseModel):
 
 class TokenOut(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 
 class IncidentCreate(BaseModel):
@@ -60,3 +80,11 @@ class AssignIncident(BaseModel):
 
 class UpdateStatus(BaseModel):
     status: IncidentStatus
+
+
+class IncidentList(BaseModel):
+    items: list[IncidentOut]
+    total: int
+    limit: int
+    offset: int
+    model_config = ConfigDict(from_attributes=True)
