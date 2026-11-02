@@ -12,3 +12,4 @@ httpx
 slowapi
 structlog
 prometheus-client
+alembic

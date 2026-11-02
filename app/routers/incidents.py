@@ -3,6 +3,8 @@ from typing import Optional
 from uuid import uuid4
 from io import BytesIO
 from pathlib import Path
+import tempfile
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from sqlalchemy.orm import Session
@@ -23,32 +25,65 @@ from app.core.config import settings
 router = APIRouter(prefix="/api/v1/incidents", tags=["Incidents"])
 
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+CHUNK_SIZE = 8192  # 8KB chunks for streaming
 
 
 def save_upload(file: UploadFile, incident_id: int) -> str:
-    """Save upload with streaming validation - doesn't load entire file into memory"""
+    """Save upload with streaming validation - writes to temp file first"""
     max_size = settings.max_upload_size_mb * 1024 * 1024
-    raw = file.file.read(max_size + 1)
 
-    if len(raw) > max_size:
-        raise HTTPException(status_code=413, detail="Image exceeds size limit")
+    # Create temp file for streaming write
+    temp_fd, temp_path = tempfile.mkstemp(dir=settings.upload_dir, suffix=".tmp")
+    os.close(temp_fd)
 
     try:
-        image = Image.open(BytesIO(raw))
-        image.verify()
-        if image.format not in ALLOWED_FORMATS:
-            raise HTTPException(status_code=415, detail="Use JPEG, PNG or WEBP")
-    except (UnidentifiedImageError, OSError):
-        raise HTTPException(status_code=415, detail="Invalid image file")
+        # Stream write to temp file with size limit
+        total_size = 0
+        with open(temp_path, "wb") as f:
+            while True:
+                chunk = file.file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > max_size:
+                    raise HTTPException(status_code=413, detail="Image exceeds size limit")
+                f.write(chunk)
 
-    directory = Path(settings.upload_dir)
-    directory.mkdir(parents=True, exist_ok=True)
+        # Validate the image after writing
+        try:
+            image = Image.open(temp_path)
+            image.verify()
+            if image.format not in ALLOWED_FORMATS:
+                raise HTTPException(status_code=415, detail="Use JPEG, PNG or WEBP")
+        except (UnidentifiedImageError, OSError):
+            raise HTTPException(status_code=415, detail="Invalid image file")
 
-    extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[image.format]
-    filename = f"{uuid4().hex}{extension}"
-    destination = directory / filename
-    destination.write_bytes(raw)
-    return str(destination)
+        # Re-open to get format (verify() closes the image)
+        image = Image.open(temp_path)
+        image_format = image.format
+        image.close()
+
+        # Move temp file to final location
+        directory = Path(settings.upload_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[image_format]
+        filename = f"{uuid4().hex}{extension}"
+        destination = directory / filename
+
+        os.replace(temp_path, destination)
+        return str(destination)
+
+    except HTTPException:
+        # Clean up temp file on HTTP errors
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
+    except Exception:
+        # Clean up temp file on any other error
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise HTTPException(status_code=500, detail="Failed to save image")
 
 
 @router.post("", response_model=IncidentOut, status_code=201)
@@ -142,9 +177,17 @@ def get_incident_image(
     if not incident.image_path:
         raise HTTPException(status_code=404, detail="No image for this incident")
 
-    # Verify file exists and serve it
+    # Verify file exists and serve it - with path traversal protection
     from pathlib import Path
-    file_path = Path(incident.image_path)
+    upload_dir = Path(settings.upload_dir).resolve()
+    file_path = Path(incident.image_path).resolve()
+
+    # Prevent path traversal - ensure file is within upload directory
+    try:
+        file_path.relative_to(upload_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid file path")
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found")
 
@@ -218,11 +261,16 @@ def analytics_summary(
     status_result = db.query(Incident.status, func.count(Incident.id)).group_by(Incident.status).all()
     by_status = {k.value: v for k, v in status_result}
 
-    avg_result = db.query(
-        func.avg(
-            func.extract('epoch', Incident.resolved_at - Incident.created_at) / 60
-        )
-    ).filter(Incident.resolved_at.isnot(None)).scalar()
+    # Database-agnostic average resolution time calculation
+    dialect = db.bind.dialect.name
+    if dialect == "sqlite":
+        # SQLite: use julianday for date difference in minutes
+        diff_expr = (func.julianday(Incident.resolved_at) - func.julianday(Incident.created_at)) * 24 * 60
+    else:
+        # PostgreSQL and others: use epoch extraction
+        diff_expr = func.extract('epoch', Incident.resolved_at - Incident.created_at) / 60
+
+    avg_result = db.query(func.avg(diff_expr)).filter(Incident.resolved_at.isnot(None)).scalar()
 
     return {
         "total_incidents": total,

@@ -27,12 +27,31 @@ logger = structlog.get_logger()
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to all responses"""
+    # Paths that need relaxed CSP for Swagger UI
+    DOCS_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        # HSTS
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        # CSP
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+
+        # HSTS - only on HTTPS
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+        # CSP - relax for docs paths to allow Swagger UI
+        if request.url.path in self.DOCS_PATHS:
+            # Relaxed CSP for Swagger UI
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data: https://fastapi.tiangolo.com; "
+                "font-src 'self' https://cdn.jsdelivr.net; "
+                "connect-src 'self'"
+            )
+        else:
+            # Strict CSP for API endpoints
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+
         # Frame options
         response.headers["X-Frame-Options"] = "DENY"
         # Referrer policy

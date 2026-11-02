@@ -3,7 +3,8 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 import jwt
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, get_token_jti
+from app.core.token_blacklist import token_blacklist
 from app.database import get_db
 from app.models import Role, User
 
@@ -19,6 +20,11 @@ def get_current_user(
         user_id = int(payload["sub"])
     except (jwt.InvalidTokenError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Check if token is blacklisted
+    jti = payload.get("jti")
+    if jti and token_blacklist.contains(jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
 
     user = db.get(User, user_id)
     if not user:
