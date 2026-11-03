@@ -1,28 +1,57 @@
 ﻿from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
-from app.database import Base, engine
+from app.database import Base, engine, get_db, init_db
 from app import models
 from app.routers import auth, incidents
 import structlog
+import time
 
 # Structured logging
-structlog.configure(
-    processors=[
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ]
-)
+if settings.log_format == "json":
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ]
+    )
+else:
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(),
+        ]
+    )
 logger = structlog.get_logger()
+
+
+# Request size limit middleware
+MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Limit request body size to prevent DoS attacks"""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Request body too large. Maximum size: {MAX_REQUEST_SIZE} bytes"
+            )
+        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -49,8 +78,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "connect-src 'self'"
             )
         else:
-            # Strict CSP for API endpoints
-            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+            # Strict CSP for API endpoints - no unsafe-inline for scripts
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'"
+            )
 
         # Frame options
         response.headers["X-Frame-Options"] = "DENY"
@@ -62,6 +96,42 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         # Permissions policy
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # Cross-Origin-Opener-Policy
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        # Cross-Origin-Resource-Policy
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        return response
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log all requests with timing"""
+
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        request_id = getattr(request.state, "request_id", "unknown")
+
+        # Log request
+        logger.info(
+            "request_started",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            client_ip=request.client.host if request.client else "unknown",
+        )
+
+        response = await call_next(request)
+
+        # Log response
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "request_completed",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=round(duration_ms, 2),
+        )
+
         return response
 
 
@@ -69,38 +139,37 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # Startup
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
-    logger.info("application_started", app_name=settings.app_name)
+    init_db()
+    logger.info("application_started", app_name=settings.app_name, environment=settings.environment)
     yield
     # Shutdown
     logger.info("application_shutdown")
 
 
+# Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
     description="Campus incident reporting and response API",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs" if settings.database_url.startswith("sqlite") else None,
-    redoc_url=None,
+    # Disable docs in production unless explicitly enabled
+    docs_url="/docs" if settings.environment != "production" else None,
+    redoc_url="/redoc" if settings.environment != "production" else None,
+    openapi_url="/openapi.json" if settings.environment != "production" else None,
 )
 
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Request size limit (custom middleware)
+app.add_middleware(RequestSizeLimitMiddleware)
+
 # Security headers (custom middleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
-# CORS - Restrictive
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5500", "http://localhost:5500"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["X-Request-ID"],
-)
+# Request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
 
 # Request ID middleware
 @app.middleware("http")
@@ -112,6 +181,17 @@ async def add_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     return response
 
+# CORS - Configurable
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
+)
+
+# Include routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(incidents.router, prefix="/api/v1")
 
@@ -121,19 +201,87 @@ app.include_router(incidents.router, prefix="/api/v1")
 def home(request: Request):
     return {
         "message": settings.app_name,
-        "docs": "/docs",
-        "health": "/health",
+        "version": "1.0.0",
+        "environment": settings.environment,
+        "docs": "/docs" if settings.environment != "production" else "disabled",
+        "health": settings.health_check_path,
     }
 
 
-@app.get("/health", tags=["System"])
-@limiter.limit("60/minute")
-def health(request: Request):
-    return {"status": "ok", "version": "0.1.0"}
+@app.get(settings.health_check_path, tags=["System"])
+@limiter.limit("120/minute")
+async def health(request: Request, db: Session = Depends(get_db)):
+    """Health check endpoint with database connectivity check"""
+    # Check database connectivity
+    db_healthy = False
+    db_error = None
+    try:
+        db.execute(text("SELECT 1"))
+        db_healthy = True
+    except Exception as e:
+        db_error = str(e)
+
+    # Check Redis connectivity if configured
+    redis_healthy = None
+    if settings.redis_url:
+        try:
+            import redis
+            r = redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+            r.ping()
+            redis_healthy = True
+        except Exception:
+            redis_healthy = False
+
+    status = "healthy" if db_healthy and (redis_healthy is None or redis_healthy) else "unhealthy"
+
+    response = {
+        "status": status,
+        "version": "1.0.0",
+        "environment": settings.environment,
+        "checks": {
+            "database": "ok" if db_healthy else "failed",
+        }
+    }
+
+    if settings.redis_url:
+        response["checks"]["redis"] = "ok" if redis_healthy else "failed"
+
+    if db_error:
+        response["checks"]["database_error"] = db_error
+
+    # Return 503 if unhealthy
+    if status == "unhealthy":
+        return JSONResponse(content=response, status_code=503)
+
+    return response
 
 
-@app.get("/metrics", tags=["System"])
+@app.get(settings.metrics_path, tags=["System"])
 async def metrics():
     """Prometheus metrics endpoint"""
+    if not settings.enable_metrics:
+        raise HTTPException(status_code=404, detail="Metrics disabled")
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+# Readiness probe endpoint (for Kubernetes/ECS)
+@app.get("/ready", tags=["System"])
+@limiter.limit("60/minute")
+async def readiness(db: Session = Depends(get_db)):
+    """Readiness probe - checks if app is ready to serve traffic"""
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception as e:
+        return JSONResponse(
+            content={"status": "not_ready", "error": str(e)},
+            status_code=503
+        )
+
+
+# Liveness probe endpoint (for Kubernetes/ECS)
+@app.get("/live", tags=["System"])
+def liveness():
+    """Liveness probe - checks if app is alive"""
+    return {"status": "alive"}

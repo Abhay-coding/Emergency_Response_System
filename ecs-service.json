@@ -1,0 +1,52 @@
+{
+  "serviceName": "emergency-response-api",
+  "taskDefinition": "emergency-response-api",
+  "cluster": "emergency-response-cluster",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 50,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-xxxxxxxx",
+        "subnet-yyyyyyyy"
+      ],
+      "securityGroups": [
+        "sg-xxxxxxxx"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:${AWS_REGION}:${ACCOUNT_ID}:targetgroup/emergency-response-api/xxxxxxxxx",
+      "containerName": "emergency-response-api",
+      "containerPort": 8000
+    }
+  ],
+  "serviceRegistries": [
+    {
+      "registryArn": "arn:aws:servicediscovery:${AWS_REGION}:${ACCOUNT_ID}:service/srv-xxxxxxxx"
+    }
+  ],
+  "enableECSManagedTags": true,
+  "propagateTags": "TASK_DEFINITION",
+  "tags": [
+    {
+      "key": "Application",
+      "value": "emergency-response"
+    },
+    {
+      "key": "Environment",
+      "value": "production"
+    }
+  ]
+}

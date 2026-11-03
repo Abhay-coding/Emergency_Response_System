@@ -1,126 +1,455 @@
-﻿# Campus Emergency Response & Resource Management System
+﻿# Campus Emergency Response System API
 
-A secure, cloud-ready campus incident reporting prototype with production-grade security practices.
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-7+-red.svg)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
+[![AWS ECS](https://img.shields.io/badge/AWS_ECS-Fargate-orange.svg)](https://aws.amazon.com/fargate/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## Current features
+A **production-ready** FastAPI application for campus incident reporting and response, designed for **AWS ECS Fargate + RDS** deployment with enterprise-grade security, observability, and scalability.
 
-- **Secure Authentication**: JWT access + refresh tokens with Argon2 password hashing
-- **Rate Limiting**: Per-endpoint limits (login: 10/min, register: 5/min, etc.)
-- **Role-based Access Control**: Reporter, Responder, Admin roles with proper authorization
-- **Incident Management**: Create, list (paginated), get, assign, update status
-- **Secure Image Upload**: File-type validation (JPEG/PNG/WEBP), size limits, authenticated access
-- **Analytics**: Optimized SQL-based aggregation (no full-table scans)
-- **Security Headers**: HSTS, CSP, X-Frame-Options, Referrer-Policy
-- **Structured Logging**: JSON logs with request IDs for tracing
-- **Prometheus Metrics**: `/metrics` endpoint for monitoring
-- **API Versioning**: All endpoints under `/api/v1/`
-- **Local SQLite Database** (dev) / PostgreSQL ready (prod)
+---
 
-## Security Features Implemented
+## 🎯 Features
 
-- ✅ No hardcoded secrets - JWT_SECRET required via environment variable
-- ✅ Rate limiting on all auth endpoints
-- ✅ Constant-time password verification (prevents email enumeration)
-- ✅ Password strength requirements (uppercase, lowercase, digit, special char)
-- ✅ No public static file serving - images require authentication
-- ✅ Security headers (HSTS, CSP, etc.)
-- ✅ CORS restricted to specific origins/methods/headers
-- ✅ Request ID tracing for all requests
-- ✅ Refresh token rotation
-- ✅ Input validation on all endpoints
+### Core Functionality
+- **Authentication & Authorization**: JWT-based access/refresh tokens with rotation, theft detection, and family-based revocation
+- **Role-Based Access Control**: Three roles — Reporter, Responder, Admin — with granular permissions
+- **Incident Management**: Full CRUD operations with image uploads, assignment, and status tracking
+- **Analytics Dashboard**: Real-time incident summaries with SQL-optimized aggregations
 
-## Requirements
+### Security First
+- **Token Security**: Family-based refresh token rotation with automatic theft detection
+- **Input Validation**: Multi-layer XSS protection (40+ regex patterns), magic byte file validation
+- **Security Headers**: Strict CSP, HSTS, COOP, CORP, Permissions-Policy, and more
+- **Rate Limiting**: User-ID based (authenticated) + IP-based (anonymous) with configurable windows
+- **Audit Logging**: Structured security event logging for compliance
 
-Python 3.11 or newer is recommended.
+### Observability
+- **Health Checks**: `/health` (DB + Redis), `/ready` (K8s/ECS readiness), `/live` (liveness)
+- **Metrics**: Prometheus `/metrics` endpoint with custom business metrics
+- **Structured Logging**: JSON/text output via `structlog` with request tracing
+- **Request Tracing**: Unique `X-Request-ID` on every response
 
-## Windows setup
+### Infrastructure Ready
+- **Database**: PostgreSQL (RDS) with connection pooling, SQLite (dev) — auto-detected
+- **Caching**: Redis-backed token blacklist with in-memory fallback
+- **Container**: Multi-stage Docker build (non-root, minimal attack surface)
+- **Orchestration**: ECS Fargate task/service definitions, EFS for persistent uploads
+- **Migrations**: Alembic with auto-generation support
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- **Docker** & **Docker Compose** (recommended)
+- **Python 3.11+** (for manual development)
+- **AWS CLI** + **Docker** (for ECS deployment)
+
+### 1. Development with Docker Compose (Recommended)
+
+```bash
+# Clone and navigate
+cd emergency-response
+
+# Copy environment template
+cp .env.example .env
+
+# Start all services (API, PostgreSQL, Redis, Prometheus, Grafana)
+docker-compose up -d
+
+# Verify services
+docker-compose ps
+
+# API:        http://localhost:8000
+# Docs:       http://localhost:8000/docs
+# Grafana:    http://localhost:3000 (admin/admin)
+# Prometheus: http://localhost:9090
+```
+
+### 2. Manual Development Setup
+
+```bash
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
-Copy-Item .env.example .env
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your settings (JWT_SECRET is REQUIRED)
+
+# Generate secure JWT secret
+# Linux/macOS: openssl rand -hex 32
+# Python: python -c "import secrets; print(secrets.token_hex(32))"
+
+# Run migrations
+alembic upgrade head
+
+# Start development server with auto-reload
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Required**: Edit `.env` and set `JWT_SECRET` with a strong random value:
-```powershell
-# Generate a secure secret:
-openssl rand -base64 64
-# Or in Python:
-# python -c "import secrets; print(secrets.token_urlsafe(64))"
+### 3. Run Tests
+
+```bash
+# Unit tests with coverage
+pytest -v --cov=app --cov-report=term-missing
+
+# HTML coverage report
+pytest --cov=app --cov-report=html
+
+# Security-focused tests
+python test_security_fixes.py
 ```
 
-Never commit `.env` to version control.
+---
 
-Run from the project root:
+## 📚 API Reference
 
-```powershell
-python -m uvicorn app.main:app --reload
+### Authentication Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---------------|
+| `POST` | `/api/v1/auth/register` | Register new Reporter | ❌ |
+| `POST` | `/api/v1/auth/login` | Login, get tokens | ❌ |
+| `POST` | `/api/v1/auth/refresh` | Rotate access token | ❌ |
+| `POST` | `/api/v1/auth/logout` | Revoke current session | ✅ |
+| `POST` | `/api/v1/auth/logout/all` | Revoke all sessions | ✅ |
+| `GET` | `/api/v1/auth/me` | Current user profile | ✅ |
+
+### Incident Endpoints
+| Method | Endpoint | Description | Roles |
+|--------|----------|-------------|-------|
+| `POST` | `/api/v1/incidents/` | Create incident | Reporter+ |
+| `GET` | `/api/v1/incidents/` | List incidents (paginated, filtered) | Reporter+ |
+| `GET` | `/api/v1/incidents/{id}` | Get incident details | Reporter+ |
+| `POST` | `/api/v1/incidents/{id}/image` | Upload incident image | Reporter+ |
+| `GET` | `/api/v1/incidents/{id}/image` | Download incident image | Reporter+ |
+| `PATCH` | `/api/v1/incidents/{id}/assign` | Assign to Responder | Admin |
+| `PATCH` | `/api/v1/incidents/{id}/status` | Update status | Responder+ |
+| `GET` | `/api/v1/incidents/analytics/summary` | Aggregated analytics | Admin |
+
+### System Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | API metadata |
+| `GET` | `/health` | Full health check (DB + Redis) |
+| `GET` | `/ready` | Kubernetes/ECS readiness probe |
+| `GET` | `/live` | Kubernetes/ECS liveness probe |
+| `GET` | `/metrics` | Prometheus metrics |
+
+---
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `ENVIRONMENT` | `development` \| `staging` \| `production` | `development` | No |
+| `DATABASE_URL` | SQLAlchemy connection string | `sqlite:///./emergency.db` | No* |
+| `JWT_SECRET` | JWT signing key (32+ chars) | — | **Yes** |
+| `ACCESS_TOKEN_MINUTES` | Access token TTL | `60` | No |
+| `REFRESH_TOKEN_DAYS` | Refresh token TTL | `7` | No |
+| `REDIS_URL` | Redis connection (for blacklist/rate limit) | `None` | No |
+| `RATE_LIMIT_REQUESTS` | Requests per window | `100` | No |
+| `RATE_LIMIT_WINDOW` | Rate limit window (seconds) | `60` | No |
+| `CORS_ORIGINS` | JSON array of allowed origins | `["http://localhost:5500"]` | No |
+| `LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | `INFO` | No |
+| `LOG_FORMAT` | `json` \| `text` | `json` | No |
+| `MAX_UPLOAD_SIZE_MB` | Max image upload size | `5` | No |
+
+> * `DATABASE_URL` is required for production. SQLite is used as fallback for development.
+
+### Example `.env` Files
+
+**Development (`.env`)**:
+```bash
+ENVIRONMENT=development
+DATABASE_URL=sqlite:///./emergency.db
+JWT_SECRET=your-super-secret-jwt-key-min-32-chars
+REDIS_URL=redis://localhost:6379/0
+CORS_ORIGINS=["http://localhost:3000","http://localhost:5500"]
+LOG_LEVEL=DEBUG
+LOG_FORMAT=text
 ```
 
-Open http://127.0.0.1:8000/docs
-
-Run tests:
-
-```powershell
-python -m pytest
+**Production (`.env.production`)**:
+```bash
+ENVIRONMENT=production
+DATABASE_URL=postgresql+psycopg://user:pass@rds-endpoint:5432/dbname
+JWT_SECRET=rotate-this-regularly-in-secrets-manager
+ACCESS_TOKEN_MINUTES=30
+REFRESH_TOKEN_DAYS=3
+REDIS_URL=redis://elasticache-endpoint:6379/0
+RATE_LIMIT_REQUESTS=200
+RATE_LIMIT_WINDOW=60
+CORS_ORIGINS=["https://your-frontend-domain.com"]
+LOG_LEVEL=INFO
+LOG_FORMAT=json
+MAX_UPLOAD_SIZE_MB=10
 ```
 
-## Environment Variables
+---
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `JWT_SECRET` | **YES** | - | 64+ char random string for JWT signing |
-| `DATABASE_URL` | No | `sqlite:///./emergency.db` | Database connection string |
-| `ACCESS_TOKEN_MINUTES` | No | `60` | Access token expiry |
-| `REFRESH_TOKEN_DAYS` | No | `7` | Refresh token expiry |
-| `RATE_LIMIT_REQUESTS` | No | `100` | Default rate limit |
-| `RATE_LIMIT_WINDOW` | No | `60` | Rate limit window (seconds) |
-| `MAX_UPLOAD_SIZE_MB` | No | `5` | Max image upload size |
+## 🗄️ Database Migrations
 
-## API Endpoints (all under `/api/v1/`)
+```bash
+# Generate new migration (after model changes)
+alembic revision --autogenerate -m "descriptive message"
 
-### Authentication
-- `POST /api/v1/auth/register` - Register new reporter
-- `POST /api/v1/auth/login` - Login (returns access + refresh tokens)
-- `POST /api/v1/auth/refresh` - Refresh access token
-- `GET /api/v1/auth/me` - Get current user profile
+# Apply all pending migrations
+alembic upgrade head
 
-### Incidents
-- `POST /api/v1/incidents/` - Create incident
-- `GET /api/v1/incidents/` - List incidents (paginated, filterable)
-- `GET /api/v1/incidents/{id}` - Get incident details
-- `POST /api/v1/incidents/{id}/image` - Upload incident image
-- `GET /api/v1/incidents/{id}/image` - Get incident image (authenticated)
-- `PATCH /api/v1/incidents/{id}/assign` - Assign to responder (admin only)
-- `PATCH /api/v1/incidents/{id}/status` - Update status (responder/admin)
-- `GET /api/v1/incidents/analytics/summary` - Analytics (admin only)
+# Rollback one migration
+alembic downgrade -1
 
-### System
-- `GET /health` - Health check
-- `GET /metrics` - Prometheus metrics
+# Show current migration
+alembic current
 
-## Initial API workflow
+# Show migration history
+alembic history
+```
 
-1. Register a reporter using `POST /api/v1/auth/register`.
-2. Use `POST /api/v1/auth/login` with form fields `username` (your email) and `password`.
-3. Click Authorize in `/docs` and enter the **access_token**.
-4. Create and list incidents via `/api/v1/incidents/`.
-5. Upload an image to an incident.
-6. Add an administrator and responder through a secure development-only setup process before testing assignment.
+---
 
-Public registration intentionally creates reporter accounts only. Do not grant admin permissions through public registration.
+## 🐳 Docker & Deployment
 
-## Cloud integration roadmap
+### Local Docker Build
+```bash
+# Build image
+docker build -t emergency-response-api .
 
-- ECS Fargate: host the FastAPI service
-- RDS PostgreSQL: production database
-- S3: incident-image object storage
-- SQS: background work queue
-- IAM: least-privilege permissions
-- ACM: TLS certificates
-- CloudWatch: logging and monitoring
-- Add production migrations, monitoring, and deployment hardening before public use
+# Run container
+docker run -d \
+  -p 8000:8000 \
+  --env-file .env \
+  -v $(pwd)/uploads:/app/uploads \
+  emergency-response-api
+```
 
-This prototype is for coursework and is not yet suitable for real emergency dispatch or production use without further hardening.
+### AWS ECS Fargate Deployment
+
+#### Prerequisites
+- AWS Account with: ECS, ECR, RDS (PostgreSQL), ElastiCache (Redis), ALB, EFS, IAM
+- AWS CLI configured with appropriate permissions
+- Docker installed and authenticated to ECR
+
+#### 1. Build & Push to ECR
+```bash
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+
+# Build, tag, push
+docker build -t emergency-response-api .
+docker tag emergency-response-api:latest \
+  ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/emergency-response-api:latest
+docker push ${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/emergency-response-api:latest
+```
+
+#### 2. Infrastructure (Terraform/CloudFormation)
+Create these resources:
+1. **VPC** with public/private subnets across 2+ AZs
+2. **RDS PostgreSQL 15+** in private subnets (Multi-AZ for production)
+3. **ElastiCache Redis 7+** in private subnets
+4. **EFS** for persistent `/app/uploads` with access points
+5. **Application Load Balancer** with HTTPS listener + target group
+6. **ECS Cluster** (Fargate, capacity provider: FARGATE)
+7. **IAM Roles**: Task Execution Role, Task Role (with Secrets Manager access)
+8. **CloudWatch Log Group** for container logs
+
+#### 3. Deploy ECS Resources
+```bash
+# Register task definition (update image URI, secrets ARNs first)
+aws ecs register-task-definition --cli-input-json file://ecs-task-definition.json
+
+# Create or update service
+aws ecs create-service --cli-input-json file://ecs-service.json
+# Or update existing:
+aws ecs update-service --cluster emergency-response-cluster \
+  --service emergency-response-api \
+  --task-definition emergency-response-api:latest \
+  --force-new-deployment
+```
+
+#### 4. Secrets Manager
+Store in AWS Secrets Manager:
+- `emergency-response/jwt-secret` — JWT signing key
+- `emergency-response/database-url` — Full PostgreSQL connection string
+- `emergency-response/redis-url` — ElastiCache endpoint (optional)
+
+---
+
+## 📁 Project Structure
+
+```
+emergency-response/
+├── app/
+│   ├── core/
+│   │   ├── config.py              # Pydantic settings (env-based)
+│   │   ├── security.py            # JWT, Argon2 password hashing
+│   │   ├── token_blacklist.py     # Redis-backed + DB persistence
+│   │   ├── rate_limit.py          # User-ID based rate limiting
+│   │   └── audit.py               # Structured security logging
+│   ├── routers/
+│   │   ├── auth.py                # Auth endpoints (register/login/refresh/logout)
+│   │   └── incidents.py           # Incident CRUD + image upload
+│   ├── models.py                  # SQLAlchemy models (User, Incident, TokenFamily)
+│   ├── schemas.py                 # Pydantic schemas + XSS validation
+│   ├── dependencies.py            # FastAPI deps (auth, rate limit keys)
+│   ├── database.py                # SQLAlchemy engine + session (PG + SQLite)
+│   └── main.py                    # FastAPI app + middleware + health checks
+├── migrations/
+│   ├── env.py                     # Alembic environment
+│   └── versions/                  # Auto-generated migrations
+├── tests/                         # (Add your tests here)
+├── Dockerfile                     # Multi-stage production build
+├── docker-compose.yml             # Local dev stack
+├── ecs-task-definition.json       # ECS Fargate task definition
+├── ecs-service.json               # ECS service definition
+├── prometheus.yml                 # Prometheus scrape config
+├── requirements.txt               # Python dependencies
+├── alembic.ini                   # Alembic configuration
+├── test_security_fixes.py         # Security regression tests
+├── .env.example                   # Environment template
+├── .gitignore                     # Comprehensive ignore patterns
+├── LICENSE                        # MIT License
+└── README.md                      # This file
+```
+
+---
+
+## 🔒 Security Architecture
+
+### Token Management
+```
+Login → Creates TokenFamily (DB + Redis)
+       ↓
+Access Token (60 min) + Refresh Token (7 days, family_id)
+       ↓
+Refresh Request → Validates family + JTI → Rotates token
+       ↓
+Theft Detection → Reused JTI? → Revoke entire family
+       ↓
+Logout → Blacklist access JTI + Revoke user's families
+```
+
+### File Upload Security
+1. **Extension validation** — allowlist only (`.jpg`, `.jpeg`, `.png`, `.webp`)
+2. **Magic byte detection** — verifies actual file format (JPEG/PNG/WEBP signatures)
+3. **MIME type verification** — python-magic library (with graceful fallback)
+4. **Size limit** — configurable (default 5MB)
+5. **Path traversal protection** — resolved path must be within upload directory
+6. **Secure storage** — UUID filenames, no user-controlled paths
+
+### Rate Limiting Strategy
+| Context | Key | Default Limit |
+|---------|-----|---------------|
+| Authenticated | `user:{user_id}` | 100 req/min |
+| Anonymous | `ip:{client_ip}` | 100 req/min |
+| Auth endpoints | Stricter limits | 5-20 req/min |
+
+---
+
+## 📊 Monitoring & Observability
+
+### Health Checks
+```bash
+# Full health (load balancer target)
+curl http://localhost:8000/health
+# {"status": "healthy", "checks": {"database": "ok", "redis": "ok"}}
+
+# Readiness (K8s/ECS)
+curl http://localhost:8000/ready
+
+# Liveness (K8s/ECS)
+curl http://localhost:8000/live
+```
+
+### Prometheus Metrics
+```bash
+curl http://localhost:8000/metrics
+```
+Exposes: HTTP request duration, DB query latency, token operations, business metrics.
+
+### Structured Logs
+```json
+{
+  "timestamp": "2026-11-03T12:00:00.000Z",
+  "level": "INFO",
+  "request_id": "abc-123",
+  "method": "POST",
+  "path": "/api/v1/auth/login",
+  "status_code": 200,
+  "duration_ms": 45.2
+}
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+pytest -v --cov=app
+
+# Security regression tests
+python test_security_fixes.py
+
+# Load testing (example)
+locust -f tests/load_test.py --host=http://localhost:8000
+```
+
+### Test Coverage Targets
+- **Unit tests**: ≥ 80% coverage
+- **Security tests**: 100% critical path coverage
+- **Integration tests**: All API endpoints
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create feature branch: `git checkout -b feature/amazing-feature`
+3. Run tests: `pytest --cov=app`
+4. Run security tests: `python test_security_fixes.py`
+5. Format code: `black . && isort . && ruff check .`
+6. Commit: `git commit -m "feat: add amazing feature"`
+7. Push: `git push origin feature/amazing-feature`
+8. Open Pull Request
+
+---
+
+## 📝 License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **FastAPI** — Modern, fast web framework
+- **SQLAlchemy** — Python SQL toolkit and ORM
+- **Pydantic** — Data validation using Python type hints
+- **Redis** — In-memory data structure store
+- **PostgreSQL** — Advanced open-source relational database
+- **Alembic** — Database migration tool for SQLAlchemy
+- **structlog** — Structured logging for Python
+
+---
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/your-org/emergency-response/issues)
+- **Security**: Report vulnerabilities to security@your-org.com
+- **Documentation**: See `/docs` endpoint when running locally
+
+---
+
+*Built with ❤️ for campus safety and emergency response teams.*

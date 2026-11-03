@@ -1,0 +1,111 @@
+{
+  "family": "emergency-response-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::${ACCOUNT_ID}:role/emergency-response-task-role",
+  "containerDefinitions": [
+    {
+      "name": "emergency-response-api",
+      "image": "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/emergency-response-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ENVIRONMENT",
+          "value": "production"
+        },
+        {
+          "name": "DATABASE_URL",
+          "value": "postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
+        },
+        {
+          "name": "REDIS_URL",
+          "value": "redis://${REDIS_HOST}:6379/0"
+        },
+        {
+          "name": "JWT_SECRET",
+          "value": "${JWT_SECRET}"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "value": "https://your-frontend-domain.com"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "LOG_FORMAT",
+          "value": "json"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${ACCOUNT_ID}:secret:emergency-response/jwt-secret"
+        },
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${ACCOUNT_ID}:secret:emergency-response/database-url"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/emergency-response-api",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "ulimits": [
+        {
+          "name": "nofile",
+          "softLimit": 65536,
+          "hardLimit": 65536
+        }
+      ],
+      "readonlyRootFilesystem": false,
+      "privileged": false,
+      "user": "appuser"
+    }
+  ],
+  "volumes": [
+    {
+      "name": "uploads",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "${EFS_FILE_SYSTEM_ID}",
+        "rootDirectory": "/uploads",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "${EFS_ACCESS_POINT_ID}",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "Application",
+      "value": "emergency-response"
+    },
+    {
+      "key": "Environment",
+      "value": "production"
+    }
+  ]
+}

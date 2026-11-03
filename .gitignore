@@ -1,9 +1,216 @@
-﻿.venv/
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+virtualenv/
+.pipenv/
+
+# Environment variables
 .env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+
+# Database
 *.db
-uploads/*
-!uploads/.gitkeep
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Uploads
+uploads/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Testing
 .pytest_cache/
 .coverage
+htmlcov/
+.tox/
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Build
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+pip-wheel-metadata/
+.metapypi.json
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.typeguard/
+
+# Docker
+.docker/
+docker-compose.override.yml
+.dockerignore
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+*.bak
+*.backup
+*.orig
+*.rej
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# IDE/Editor specific
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IntelliJ/PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim/Neovim
+*.swp
+*.swo
+*~
+.vim/
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Mac
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# CI/CD
+.github/workflows/*.yml.bak
+.gitlab-ci.yml.bak
+.circleci/config.yml.bak
+
+# Package managers
+node_modules/
+bower_components/
+jspm_packages/
+.pnp/
+.pnp.js
+
+# Profiling
+*.prof
+*.pstats
+
+# Documentation
+docs/_build/
+docs/.build/
+site/
+docs/dist/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment specific
+.env.*.local
+.env.production.local
+.env.development.local
+.env.test.local
+
+# Local development overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# IDE workspace files
+*.code-workspace
+*.sublime-workspace
+*.sublime-project
+
+# Alembic
+migrations/versions/*.pyc
+migrations/versions/__pycache__/
+
+# Security/Secrets
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.cer
+*.der
+id_rsa
+id_ed25519
+*.ssh/
+
+# OS generated files
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
