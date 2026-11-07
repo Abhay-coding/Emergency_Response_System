@@ -1,0 +1,450 @@
+# GitHub Actions CI/CD Pipeline for Campus Medical Assistance
+#
+# This workflow:
+# 1. Runs tests on every push/PR
+# 2. Builds and pushes Docker image to ECR on merge to main
+# 3. Deploys to staging on merge to main
+# 4. Deploys to production on tag push (v*)
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: emergency-response-api
+  ECS_CLUSTER: emergency-response-${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+  ECS_SERVICE_API: emergency-response-api
+  ECS_SERVICE_WORKER: emergency-response-worker
+  CONTAINER_NAME: emergency-response-api
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  # TEST JOB
+  # ──────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: emergency_test
+        ports: 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Configure test environment
+        run: |
+          cat > .env.test <<EOF
+          ENVIRONMENT=testing
+          DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/emergency_test
+          REDIS_URL=redis://localhost:6379/0
+          JWT_SECRET=test-secret-key-for-testing-only-min-32-chars
+          LOG_LEVEL=DEBUG
+          LOG_FORMAT=text
+          CORS_ORIGINS=["http://localhost:3000"]
+          NOTIFICATION_MODE=simulation
+          EOF
+
+      - name: Run database migrations
+        run: |
+          alembic upgrade head
+
+      - name: Run tests with coverage
+        run: |
+          pytest -v --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Run security tests
+        run: |
+          python test_security_fixes.py
+
+      - name: Run linting
+        run: |
+          pip install black isort ruff mypy
+          black --check .
+          isort --check .
+          ruff check .
+          mypy app/
+
+  # ──────────────────────────────────────────────────────────────
+  # BUILD AND PUSH DOCKER IMAGE
+  # ──────────────────────────────────────────────────────────────
+  build:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Output image URI
+        run: |
+          echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tags }}" >> $GITHUB_ENV
+          echo "Image pushed: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tags }}"
+
+  # ──────────────────────────────────────────────────────────────
+  # DEPLOY TO STAGING
+  # ──────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-Staging-${{ github.run_id }}
+
+      - name: Download task definition templates
+        run: |
+          # Templates are in the repo at ecs-task-definition.json and ecs-worker-task-definition.json
+          echo "Using local task definition templates"
+
+      - name: Update task definition with new image
+        id: task-def-api
+        run: |
+          IMAGE="${{ env.IMAGE_URI }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          # Update API task definition
+          sed -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
+              -e "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" \
+              -e "s|\${IMAGE_TAG}|${{ github.sha }}|g" \
+              -e "s|\${ECR_IMAGE_URI}|${IMAGE}|g" \
+              ecs-task-definition.json > /tmp/api-task-def.json
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/api-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+
+      - name: Update worker task definition
+        id: task-def-worker
+        run: |
+          IMAGE="${{ env.IMAGE_URI }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          sed -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
+              -e "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" \
+              -e "s|\${IMAGE_TAG}|${{ github.sha }}|g" \
+              -e "s|\${ECR_IMAGE_URI}|${IMAGE}|g" \
+              ecs-worker-task-definition.json > /tmp/worker-task-def.json
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/worker-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+
+      - name: Deploy API service
+        run: |
+          aws ecs update-service \
+            --cluster emergency-response-staging \
+            --service emergency-response-api \
+            --task-definition ${{ steps.task-def-api.outputs.task_def_arn }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy Worker service
+        run: |
+          aws ecs update-service \
+            --cluster emergency-response-staging \
+            --service emergency-response-worker \
+            --task-definition ${{ steps.task-def-worker.outputs.task_def_arn }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for deployment stability
+        run: |
+          for service in emergency-response-api emergency-response-worker; do
+            echo "Waiting for $service..."
+            aws ecs wait services-stable \
+              --cluster emergency-response-staging \
+              --services $service \
+              --region ${{ env.AWS_REGION }}
+          done
+
+      - name: Run database migrations
+        run: |
+          # Get network config from SSM or use known values
+          PRIVATE_SUBNETS=$(aws ssm get-parameter --name /emergency-response/staging/private-subnets --query Parameter.Value --output text)
+          SECURITY_GROUPS=$(aws ssm get-parameter --name /emergency-response/staging/ecs-sg --query Parameter.Value --output text)
+
+          cat > /tmp/migration-override.json <<EOF
+          {
+            "containerOverrides": [
+              {
+                "name": "emergency-response-api",
+                "command": ["python", "-m", "alembic", "upgrade", "head"]
+              }
+            ]
+          }
+          EOF
+
+          TASK_ARN=$(aws ecs run-task \
+            --cluster emergency-response-staging \
+            --task-definition ${{ steps.task-def-api.outputs.task_def_arn }} \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=DISABLED}" \
+            --overrides file:///tmp/migration-override.json \
+            --query 'tasks[0].taskArn' --output text)
+
+          aws ecs wait tasks-stopped --cluster emergency-response-staging --tasks $TASK_ARN --region ${{ env.AWS_REGION }}
+
+          EXIT_CODE=$(aws ecs describe-tasks --cluster emergency-response-staging --tasks $TASK_ARN --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "Migration failed with exit code $EXIT_CODE"
+            exit 1
+          fi
+          echo "Migration completed successfully"
+
+  # ──────────────────────────────────────────────────────────────
+  # DEPLOY TO PRODUCTION
+  # ──────────────────────────────────────────────────────────────
+  deploy-production:
+    name: Deploy to Production
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-Production-${{ github.run_id }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update task definition with new image
+        id: task-def-api
+        run: |
+          IMAGE="${{ env.IMAGE_URI }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          sed -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
+              -e "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" \
+              -e "s|\${IMAGE_TAG}|${{ steps.version.outputs.version }}|g" \
+              -e "s|\${ECR_IMAGE_URI}|${IMAGE}|g" \
+              ecs-task-definition.json > /tmp/api-task-def.json
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/api-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+
+      - name: Update worker task definition
+        id: task-def-worker
+        run: |
+          IMAGE="${{ env.IMAGE_URI }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          sed -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
+              -e "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" \
+              -e "s|\${IMAGE_TAG}|${{ steps.version.outputs.version }}|g" \
+              -e "s|\${ECR_IMAGE_URI}|${IMAGE}|g" \
+              ecs-worker-task-definition.json > /tmp/worker-task-def.json
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file:///tmp/worker-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+
+      - name: Deploy API service (Production)
+        run: |
+          aws ecs update-service \
+            --cluster emergency-response-production \
+            --service emergency-response-api \
+            --task-definition ${{ steps.task-def-api.outputs.task_def_arn }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy Worker service (Production)
+        run: |
+          aws ecs update-service \
+            --cluster emergency-response-production \
+            --service emergency-response-worker \
+            --task-definition ${{ steps.task-def-worker.outputs.task_def_arn }} \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for deployment stability
+        run: |
+          for service in emergency-response-api emergency-response-worker; do
+            echo "Waiting for $service..."
+            aws ecs wait services-stable \
+              --cluster emergency-response-production \
+              --services $service \
+              --region ${{ env.AWS_REGION }}
+          done
+
+      - name: Run database migrations (Production)
+        run: |
+          PRIVATE_SUBNETS=$(aws ssm get-parameter --name /emergency-response/production/private-subnets --query Parameter.Value --output text)
+          SECURITY_GROUPS=$(aws ssm get-parameter --name /emergency-response/production/ecs-sg --query Parameter.Value --output text)
+
+          cat > /tmp/migration-override.json <<EOF
+          {
+            "containerOverrides": [
+              {
+                "name": "emergency-response-api",
+                "command": ["python", "-m", "alembic", "upgrade", "head"]
+              }
+            ]
+          }
+          EOF
+
+          TASK_ARN=$(aws ecs run-task \
+            --cluster emergency-response-production \
+            --task-definition ${{ steps.task-def-api.outputs.task_def_arn }} \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=DISABLED}" \
+            --overrides file:///tmp/migration-override.json \
+            --query 'tasks[0].taskArn' --output text)
+
+          aws ecs wait tasks-stopped --cluster emergency-response-production --tasks $TASK_ARN --region ${{ env.AWS_REGION }}
+
+          EXIT_CODE=$(aws ecs describe-tasks --cluster emergency-response-production --tasks $TASK_ARN --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "Migration failed with exit code $EXIT_CODE"
+            exit 1
+          fi
+          echo "Migration completed successfully"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Deployment to Production
+            - **Version**: ${{ steps.version.outputs.version }}
+            - **Image**: ${{ env.IMAGE_URI }}
+            - **Cluster**: emergency-response-production
+            - **Deployed by**: GitHub Actions
+            - **Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+  # ──────────────────────────────────────────────────────────────
+  # NOTIFICATIONS
+  # ──────────────────────────────────────────────────────────────
+  notify:
+    name: Notify
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send notification
+        if: failure()
+        run: |
+          echo "Deployment failed!"
+          # Add Slack/Discord/Email notification here
+          # Example: curl -X POST -H 'Content-type: application/json' --data '{"text":"Deployment failed for ${{ github.repository }}"}' ${{ secrets.SLACK_WEBHOOK_URL }}

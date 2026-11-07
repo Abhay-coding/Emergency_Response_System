@@ -26,6 +26,8 @@ window.CER_CONFIG = {
   FEATURES: {
     ENABLE_GEOLOCATION: true,
     ENABLE_NOTIFICATIONS: true,
+    ENABLE_MESSAGES: false,
+    ENABLE_LOCATION_UPDATES: false,
   },
 
   // Build info (populated at build time)

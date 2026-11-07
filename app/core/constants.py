@@ -1,0 +1,101 @@
+"""Centralized constants for the application to replace magic numbers"""
+
+# Token and Authentication Constants
+DEFAULT_ACCESS_TOKEN_MINUTES = 60
+DEFAULT_REFRESH_TOKEN_DAYS = 7
+DEFAULT_JWT_ALGORITHM = "HS256"
+
+# Token Blacklist Constants
+TOKEN_BLACKLIST_CLEANUP_INTERVAL_SECONDS = 3600  # 1 hour
+TOKEN_BLACKLIST_SYNC_INTERVAL_SECONDS = 60  # 1 minute
+TOKEN_FAMILY_MAX_AGE_DAYS = 30
+TOKEN_BLACKLIST_TTL_BUFFER_SECONDS = 3600  # 1 hour buffer
+
+# Rate Limiting Constants
+DEFAULT_RATE_LIMIT_REQUESTS = 100
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+
+# File Upload Constants
+DEFAULT_MAX_UPLOAD_SIZE_MB = 5
+UPLOAD_CHUNK_SIZE_BYTES = 8192  # 8KB
+
+# Image Validation Constants
+ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+
+# Magic bytes for image format detection
+IMAGE_MAGIC_BYTES = {
+    b'\xff\xd8\xff': 'JPEG',
+    b'\x89PNG\r\n\x1a\n': 'PNG',
+    b'RIFF': 'WEBP',
+}
+
+# Database Constants
+DEFAULT_DB_POOL_SIZE = 5
+DEFAULT_DB_MAX_OVERFLOW = 10
+DEFAULT_DB_POOL_TIMEOUT = 30
+DEFAULT_DB_POOL_RECYCLE_SECONDS = 3600
+SQLITE_CACHE_SIZE_KB = 32768  # 32MB
+
+# Alert Constants
+DEFAULT_ALERT_ACK_SECONDS = 60
+GUEST_TOKEN_EXPIRY_DAYS = 3
+IDEMPOTENCY_KEY_VERSION = 4  # UUID v4
+
+# Worker Constants
+WORKER_POLL_INTERVAL_ACTIVE_SECONDS = 1
+WORKER_POLL_INTERVAL_IDLE_SECONDS = 5
+WORKER_SQS_WAIT_TIME_SECONDS = 20  # Long polling
+WORKER_SQS_MAX_MESSAGES = 10
+WORKER_MAX_RETRIES = 3
+WORKER_RETRY_BASE_DELAY_SECONDS = 30
+
+# Notification Constants
+NOTIFICATION_MODE_SIMULATION = "simulation"
+NOTIFICATION_MODE_SNS = "sns"
+
+# Security Constants
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
+MIN_ADMIN_PASSWORD_LENGTH = 12
+PASSWORD_REQUIRE_UPPERCASE = True
+PASSWORD_REQUIRE_LOWERCASE = True
+PASSWORD_REQUIRE_DIGIT = True
+PASSWORD_REQUIRE_SPECIAL = True
+PASSWORD_SPECIAL_CHARS = "@$!%*?&"
+
+# Audit Constants
+AUDIT_LOG_LEVEL_SUCCESS = "INFO"
+AUDIT_LOG_LEVEL_FAILURE = "WARNING"
+
+# Pagination Constants
+DEFAULT_PAGE_LIMIT = 20
+MAX_PAGE_LIMIT = 100
+DEFAULT_PAGE_OFFSET = 0
+
+# CORS Constants
+# Production MUST explicitly set CORS origins via environment variable
+# Default is empty list to prevent insecure localhost defaults in production
+DEFAULT_CORS_ORIGINS = []
+DEFAULT_ALLOWED_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+DEFAULT_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Request-ID"]
+DEFAULT_EXPOSE_HEADERS = ["X-Request-ID"]
+
+# Request Size Limits
+MAX_REQUEST_SIZE_MB = 10
+
+# Health Check Constants
+HEALTH_CHECK_DB_QUERY = "SELECT 1"
+HEALTH_CHECK_REDIS_TIMEOUT_SECONDS = 1
+
+# Timezone
+DEFAULT_CAMPUS_TIMEZONE = "Asia/Kolkata"
+
+# Logging
+DEFAULT_LOG_LEVEL = "DEBUG"
+DEFAULT_LOG_FORMAT = "json"

@@ -31,6 +31,9 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
+# Password hash version constant - increment when hash algorithm/parameters change
+CURRENT_PASSWORD_HASH_VERSION = 2
+
 class User(Base):
     __tablename__ = "users"
 
@@ -40,12 +43,17 @@ class User(Base):
         String(255), unique=True, index=True
     )
     password_hash: Mapped[str] = mapped_column(String(255))
+    password_hash_version: Mapped[int] = mapped_column(
+        default=CURRENT_PASSWORD_HASH_VERSION
+    )
     role: Mapped[Role] = mapped_column(
         Enum(Role), default=Role.reporter, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True
     )
+    # Track if user must reset password (e.g., due to outdated hash)
+    must_reset_password: Mapped[bool] = mapped_column(default=False)
 
     # Token families for logout/revocation tracking
     token_families: Mapped[list["TokenFamily"]] = relationship(
@@ -131,6 +139,7 @@ class MedicalAlert(Base):
     guest_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     guest_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="new", index=True)
     verification: Mapped[str] = mapped_column(String(30), default="unverified")
     place_id: Mapped[int | None] = mapped_column(ForeignKey("campus_places.id"), nullable=True)
@@ -216,3 +225,8 @@ class NotificationJob(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Composite index for efficient querying of pending jobs by due date
+    __table_args__ = (
+        Index("ix_notification_jobs_status_due_at", "status", "due_at"),
+    )

@@ -1,0 +1,56 @@
+# Terraform Variables - Example Configuration
+#
+# Copy this file to terraform.tfvars and fill in your actual values
+# NEVER commit terraform.tfvars to version control (contains secrets)
+
+# AWS Configuration
+aws_region     = "us-east-1"
+project_name   = "emergency-response"
+environment    = "production"  # development, staging, or production
+
+# VPC Configuration (adjust CIDRs as needed for your network)
+vpc_cidr            = "10.0.0.0/16"
+az_count            = 2
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+public_subnet_cidrs  = ["10.0.101.0/24", "10.0.102.0/24"]
+
+# Database Configuration
+db_instance_class        = "db.t3.medium"    # db.t3.small for dev, db.t3.medium+ for prod
+db_allocated_storage     = 20
+db_max_allocated_storage = 100
+db_name                  = "emergency"
+db_username              = "admin"
+
+# Redis Configuration
+redis_node_type = "cache.t3.micro"  # cache.t3.small for production
+
+# ACM Certificate ARN (REQUIRED for HTTPS)
+# Request a certificate in ACM for your domain (e.g., api.yourdomain.com)
+# Must be in the same region as the ALB
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Container Resources
+api_cpu    = 512   # 256, 512, 1024, 2048, 4096
+api_memory = 1024  # 512, 1024, 2048, 4096, 8192, 16384, 30720
+worker_cpu    = 256
+worker_memory = 512
+
+# Desired Task Counts
+api_desired_count    = 2  # Minimum 2 for HA
+worker_desired_count = 1
+
+# Domain Configuration (optional)
+domain_name    = "api.yourdomain.com"
+hosted_zone_id = "Z123456789EXAMPLE"
+
+# Notification Phone Numbers (E.164 format, e.g., +15551234567)
+campus_emergency_phone = "+15551234567"
+backup_phone           = "+15559876543"
+
+# Additional Tags (optional)
+additional_tags = {
+  Owner       = "team-name"
+  CostCenter  = "engineering"
+  Project     = "campus-medical-assistance"
+  Environment = "production"
+}

@@ -1,14 +1,9 @@
 ﻿from datetime import datetime, timezone
 from typing import Optional
-from uuid import uuid4
-from pathlib import Path
-import tempfile
-import os
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from PIL import Image, UnidentifiedImageError
 
 from app.core.audit import log_security_event, AuditEventType
 from app.core.rate_limit import limiter
@@ -20,177 +15,9 @@ from app.models import (
 from app.schemas import (
     IncidentCreate, IncidentOut, AssignIncident, UpdateStatus, IncidentList
 )
-from app.core.config import settings
+from app.services.storage import save_upload
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
-
-ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-# MIME types for allowed formats
-ALLOWED_MIME_TYPES = {
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-}
-# Magic bytes for image formats
-MAGIC_BYTES = {
-    b'\xff\xd8\xff': 'JPEG',      # JPEG
-    b'\x89PNG\r\n\x1a\n': 'PNG',  # PNG
-    b'RIFF': 'WEBP',              # WEBP (starts with RIFF, need to check further)
-}
-CHUNK_SIZE = 8192  # 8KB chunks for streaming
-
-
-def validate_file_extension(filename: str) -> None:
-    """Validate file extension against allowed extensions"""
-    if not filename:
-        raise HTTPException(status_code=415, detail="Filename is required")
-    ext = Path(filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=415,
-            detail=f"File extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
-        )
-
-
-def validate_mime_type(file: UploadFile) -> None:
-    """Validate MIME type from file content (magic bytes)"""
-    # Read first 12 bytes for magic byte detection
-    header = file.file.read(12)
-    file.file.seek(0)  # Reset file pointer
-
-    if not header:
-        raise HTTPException(status_code=415, detail="Empty file")
-
-    # Check magic bytes
-    detected_format = None
-    for magic_bytes, fmt in MAGIC_BYTES.items():
-        if header.startswith(magic_bytes):
-            # For WEBP, need to check further
-            if fmt == 'WEBP':
-                # Read more bytes to confirm WEBP
-                more = file.file.read(20)
-                file.file.seek(0)
-                if b'WEBP' in header + more:
-                    detected_format = 'WEBP'
-            else:
-                detected_format = fmt
-            break
-
-    if not detected_format:
-        raise HTTPException(status_code=415, detail="Invalid image format. Only JPEG, PNG, and WEBP are allowed.")
-
-    if detected_format not in ALLOWED_FORMATS:
-        raise HTTPException(status_code=415, detail="Image format not allowed")
-
-
-def validate_mime_type_with_python_magic(file: UploadFile) -> str:
-    """Validate MIME type using python-magic library"""
-    try:
-        import magic
-    except ImportError:
-        raise HTTPException(status_code=500, detail="python-magic not available")
-
-    # Read a chunk for magic detection
-    chunk = file.file.read(8192)
-    file.file.seek(0)
-
-    if not chunk:
-        raise HTTPException(status_code=415, detail="Empty file")
-
-    try:
-        # Detect MIME type
-        mime_type = magic.from_buffer(chunk, mime=True)
-    except Exception as e:
-        # python-magic might fail on some systems
-        raise HTTPException(status_code=415, detail=f"MIME type detection failed: {e}")
-
-    if mime_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"MIME type '{mime_type}' not allowed. Allowed: {', '.join(ALLOWED_MIME_TYPES)}"
-        )
-
-    return mime_type
-
-
-def save_upload(file: UploadFile, incident_id: int) -> str:
-    """Save upload with streaming validation - writes to temp file first"""
-    max_size = settings.max_upload_size_mb * 1024 * 1024
-
-    # Validate file extension first
-    validate_file_extension(file.filename)
-
-    # Validate MIME type from content (magic bytes)
-    try:
-        mime_type = validate_mime_type_with_python_magic(file)
-    except ImportError:
-        # Fallback to manual magic byte detection if python-magic not available
-        validate_mime_type(file)
-
-    # Create temp file for streaming write
-    temp_fd, temp_path = tempfile.mkstemp(dir=settings.upload_dir, suffix=".tmp")
-    os.close(temp_fd)
-
-    try:
-        # Stream write to temp file with size limit
-        total_size = 0
-        with open(temp_path, "wb") as f:
-            while True:
-                chunk = file.file.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                total_size += len(chunk)
-                if total_size > max_size:
-                    raise HTTPException(status_code=413, detail="Image exceeds size limit")
-                f.write(chunk)
-
-        # Validate the image after writing using PIL
-        try:
-            image = Image.open(temp_path)
-            image.verify()
-            if image.format not in ALLOWED_FORMATS:
-                raise HTTPException(status_code=415, detail="Use JPEG, PNG or WEBP")
-        except (UnidentifiedImageError, OSError):
-            raise HTTPException(status_code=415, detail="Invalid image file")
-
-        # Re-open to get format (verify() closes the image)
-        image = Image.open(temp_path)
-        image_format = image.format
-        image.close()
-
-        # Double-check MIME type matches format
-        format_to_mime = {
-            "JPEG": "image/jpeg",
-            "PNG": "image/png",
-            "WEBP": "image/webp",
-        }
-        expected_mime = format_to_mime.get(image_format)
-        if expected_mime and mime_type != expected_mime:
-            # Log mismatch but don't fail - PIL is more reliable for format
-            pass
-
-        # Move temp file to final location
-        directory = Path(settings.upload_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-
-        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}[image_format]
-        filename = f"{uuid4().hex}{extension}"
-        destination = directory / filename
-
-        os.replace(temp_path, destination)
-        return str(destination)
-
-    except HTTPException:
-        # Clean up temp file on HTTP errors
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        raise
-    except Exception:
-        # Clean up temp file on any other error
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        raise HTTPException(status_code=500, detail="Failed to save image")
 
 
 @router.post("", response_model=IncidentOut, status_code=201)
@@ -279,7 +106,7 @@ def upload_incident_image(
     if (user.role == Role.reporter and incident.reporter_id != user.id) or (user.role == Role.responder and incident.assigned_to != user.id):
         raise HTTPException(status_code=403, detail="Not permitted")
 
-    path = save_upload(file, incident_id)
+    path = save_upload(file, prefix=f"incident_{incident_id}_")
     incident.image_path = path
     db.commit()
     db.refresh(incident)
@@ -315,8 +142,32 @@ def get_incident_image(
 
     # Verify file exists and serve it - with path traversal protection
     from pathlib import Path
+    import os
+
     upload_dir = Path(settings.upload_dir).resolve()
-    file_path = Path(incident.image_path).resolve()
+
+    # Get the file path without resolving symlinks
+    file_path = Path(incident.image_path)
+
+    # Check if path is a symlink or contains symlinks
+    # We need to resolve to check, but we should reject symlinks
+    try:
+        # Check if the path itself is a symlink
+        if file_path.is_symlink():
+            raise HTTPException(status_code=403, detail="Symlinks not allowed")
+
+        # Also check if any parent directory is a symlink
+        for parent in file_path.parents:
+            if parent.is_symlink():
+                raise HTTPException(status_code=403, detail="Symlinks in path not allowed")
+
+        # Now resolve the path safely (no symlinks in path)
+        file_path = file_path.resolve()
+
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid file path")
 
     # Prevent path traversal - ensure file is within upload directory
     try:
@@ -332,7 +183,9 @@ def get_incident_image(
 
 
 @router.patch("/{incident_id}/assign", response_model=IncidentOut)
+@limiter.limit("20/minute")
 def assign_incident(
+    request: Request,
     incident_id: int,
     data: AssignIncident,
     db: Session = Depends(get_db),
@@ -410,7 +263,9 @@ def update_status(
 
 
 @router.get("/analytics/summary")
+@limiter.limit("20/minute")
 def analytics_summary(
+    request: Request,
     db: Session = Depends(get_db),
     admin: User = Depends(require_roles(Role.admin)),
 ):

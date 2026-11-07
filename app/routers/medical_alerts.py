@@ -7,20 +7,23 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.core.constants import GUEST_TOKEN_EXPIRY_DAYS
 from app.database import get_db
 from app.dependencies import get_optional_user, require_roles
 from app.models import (
     AlertAssignment, AlertEvent, AlertMessage, CampusPlace, MedicalAlert,
     NotificationJob, PlaceCoverage, Role, StaffContact, User, utc_now,
 )
+from app.schemas import validate_no_xss
 from app.services.notifications import queue_job
+from app.data_api_repository import DataAPIRepository, get_repo
 
 router = APIRouter(prefix="/medical-alerts", tags=["Medical alerts"])
 
@@ -50,16 +53,20 @@ def seed_places(db: Session) -> None:
 
 def token_for_key(key: str) -> str:
     # The client-generated idempotency key is never returned in admin views.
-    return hmac_new(settings.jwt_secret.encode(), f"guest:{key}".encode(), "sha256").hexdigest()
+    # Use guest_token_secret if configured, otherwise fall back to jwt_secret for backward compatibility
+    secret = settings.guest_token_secret or settings.jwt_secret
+    return hmac_new(secret.encode(), f"guest:{key}".encode(), "sha256").hexdigest()
 
 
 def guest_access(alert: MedicalAlert, token: str | None) -> bool:
     expires = alert.guest_token_expires_at
     if not expires or expires.replace(tzinfo=timezone.utc) <= utc_now():
         return False
-    return bool(alert.guest_token_hash and token and compare_digest(
-        alert.guest_token_hash, sha256(token.encode()).hexdigest()
-    ))
+    if not alert.guest_token_hash or not token:
+        return False
+    # Compute hash first to avoid timing attack on hash computation
+    token_hash = sha256(token.encode()).hexdigest()
+    return compare_digest(alert.guest_token_hash, token_hash)
 
 
 def access_or_403(alert: MedicalAlert, user: User | None, token: str | None) -> None:
@@ -106,6 +113,13 @@ class LocationUpdate(BaseModel):
     callback_phone: str | None = Field(default=None, max_length=30)
     details: str | None = Field(default=None, max_length=1000)
 
+    @field_validator('place_name', 'location_text', 'callback_phone', 'details')
+    @classmethod
+    def validate_no_xss_fields(cls, v: str | None) -> str | None:
+        if v is not None:
+            return validate_no_xss(v, 'location_update')
+        return v
+
 
 class StaffAlert(BaseModel):
     user_id: int | None = None
@@ -130,7 +144,6 @@ class MessageIn(BaseModel):
 
 @router.get("/places")
 def places(db: Session = Depends(get_db)):
-    seed_places(db)
     return [dict(id=p.id, name=p.name, kind=p.kind) for p in
             db.query(CampusPlace).filter(CampusPlace.active.is_(True)).order_by(CampusPlace.name).all()]
 
@@ -145,14 +158,27 @@ def public_config():
 @limiter.limit("10/minute")
 def create_alert(request: Request, data: AlertCreate,
                  idempotency_key: str = Header(..., alias="Idempotency-Key"),
-                 db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)):
+                 db: Session = Depends(get_db), user: User | None = Depends(get_optional_user),
+                 repo: DataAPIRepository | None = Depends(lambda: get_repo() if settings.data_api_enabled else None)):
     try:
         parsed_key = UUID(idempotency_key)
-        if parsed_key.version != 4:
-            raise ValueError("Use a random UUID")
+        # Accept any valid UUID version, not just v4
         idempotency_key = str(parsed_key)
     except ValueError:
-        raise HTTPException(422, "Idempotency-Key must be a random UUID")
+        raise HTTPException(422, "Idempotency-Key must be a valid UUID")
+    if repo:
+        tx = repo.begin_transaction()
+        try:
+            inserted = repo.execute(
+                "INSERT INTO medical_alerts (idempotency_key, source, reporter_id, status, verification, created_at, updated_at) VALUES (:key, :source, :reporter_id, 'new', 'unverified', NOW(), NOW()) RETURNING id",
+                [{"name":"key","value":{"stringValue":idempotency_key}}, {"name":"source","value":{"stringValue":data.source}}, {"name":"reporter_id","value":{"isNull": user is None, **({"longValue":user.id} if user else {})}}], tx)
+            alert_id = inserted["records"][0][0]["longValue"]
+            repo.execute("INSERT INTO alert_events (alert_id, actor_id, action, created_at) VALUES (:alert_id, :actor_id, 'created', NOW())", [{"name":"alert_id","value":{"longValue":alert_id}}, {"name":"actor_id","value":{"isNull": user is None, **({"longValue":user.id} if user else {})}}], tx)
+            repo.commit(tx)
+            return {"id": alert_id, "status": "new", "identity_verified": bool(user), "guest_token": None}
+        except Exception as exc:
+            repo.rollback(tx)
+            raise HTTPException(503, "Unable to record medical alert") from exc
     existing = db.query(MedicalAlert).filter_by(idempotency_key=idempotency_key).first()
     if existing:
         if existing.reporter_id != (user.id if user else None):
@@ -165,7 +191,7 @@ def create_alert(request: Request, data: AlertCreate,
     alert = MedicalAlert(
         source=data.source, reporter_id=user.id if user else None,
         guest_token_hash=sha256(guest_token.encode()).hexdigest() if guest_token else None,
-        guest_token_expires_at=utc_now() + timedelta(days=3) if guest_token else None,
+        guest_token_expires_at=utc_now() + timedelta(days=GUEST_TOKEN_EXPIRY_DAYS) if guest_token else None,
         idempotency_key=idempotency_key,
     )
     db.add(alert)
@@ -196,23 +222,47 @@ def my_alerts(db: Session = Depends(get_db), user: User | None = Depends(get_opt
 
 
 @router.get("/admin/queue")
-def admin_queue(db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
+@limiter.limit("30/minute")
+def admin_queue(request: Request, db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
     alerts = db.query(MedicalAlert).order_by(MedicalAlert.created_at.desc()).limit(100).all()
     return [alert_view(a) for a in alerts]
 
 
 @router.get("/staff/inbox")
-def staff_inbox(db: Session = Depends(get_db), user: User = Depends(require_roles(Role.responder))):
-    assignments = db.query(AlertAssignment).filter_by(user_id=user.id).order_by(AlertAssignment.id.desc()).all()
-    latest = {}
-    for assignment in assignments:
-        latest.setdefault(assignment.alert_id, assignment)
-    alert_ids = list(latest)
-    if not alert_ids:
-        return []
-    return [dict(alert_view(a), assignment_status=latest[a.id].status)
-            for a in db.query(MedicalAlert).filter(MedicalAlert.id.in_(alert_ids))
-            .order_by(MedicalAlert.created_at.desc()).all()]
+@limiter.limit("30/minute")
+def staff_inbox(request: Request, db: Session = Depends(get_db), user: User = Depends(require_roles(Role.responder))):
+    """Get staff inbox with single query using subquery to avoid N+1"""
+    # Subquery to get latest assignment per alert for this user
+    from sqlalchemy import func
+    latest_assignment_subq = (
+        db.query(
+            AlertAssignment.alert_id,
+            func.max(AlertAssignment.id).label("max_id")
+        )
+        .filter(AlertAssignment.user_id == user.id)
+        .group_by(AlertAssignment.alert_id)
+        .subquery()
+    )
+
+    # Join with MedicalAlert and AlertAssignment in single query
+    results = (
+        db.query(MedicalAlert, AlertAssignment)
+        .join(
+            latest_assignment_subq,
+            (MedicalAlert.id == latest_assignment_subq.c.alert_id)
+        )
+        .join(
+            AlertAssignment,
+            (AlertAssignment.id == latest_assignment_subq.c.max_id)
+        )
+        .order_by(MedicalAlert.created_at.desc())
+        .all()
+    )
+
+    return [
+        dict(alert_view(alert), assignment_status=assignment.status)
+        for alert, assignment in results
+    ]
 
 
 @router.get("/{alert_id}/public")
@@ -234,15 +284,24 @@ def update_location(alert_id: int, data: LocationUpdate,
         raise HTTPException(404, "Alert not found")
     access_or_403(alert, user, x_alert_token)
     if data.place_name:
-        seed_places(db)
         place = db.query(CampusPlace).filter(CampusPlace.name == data.place_name,
                                             CampusPlace.active.is_(True)).first()
         if not place:
             raise HTTPException(422, "Unknown campus place")
         alert.place_id = place.id
-    for field in ("location_text", "latitude", "longitude", "accuracy_m", "callback_phone", "details"):
-        value = getattr(data, field)
-        if value is not None:
+
+    # Explicit field mapping to prevent SQL injection via setattr with user-controlled field names
+    allowed_fields = {
+        "location_text": data.location_text,
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "accuracy_m": data.accuracy_m,
+        "callback_phone": data.callback_phone,
+        "details": data.details,
+    }
+
+    for field, value in allowed_fields.items():
+        if field in data.model_fields_set and value is not None:
             setattr(alert, field, value)
     event(db, alert.id, "details_updated", user.id if user else None)
     db.commit()
@@ -251,7 +310,8 @@ def update_location(alert_id: int, data: LocationUpdate,
 
 
 @router.post("/{alert_id}/claim")
-def claim_alert(alert_id: int, db: Session = Depends(get_db),
+@limiter.limit("20/minute")
+def claim_alert(request: Request, alert_id: int, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
     now = utc_now()
     result = db.execute(update(MedicalAlert).where(
@@ -277,7 +337,8 @@ def admin_alert(db: Session, alert_id: int) -> MedicalAlert:
 
 
 @router.post("/{alert_id}/contact")
-def record_contact(alert_id: int, data: ActionNote, db: Session = Depends(get_db),
+@limiter.limit("20/minute")
+def record_contact(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                    admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     alert.status = "checking"
@@ -287,7 +348,8 @@ def record_contact(alert_id: int, data: ActionNote, db: Session = Depends(get_db
 
 
 @router.post("/{alert_id}/verify")
-def verify_need(alert_id: int, data: ActionNote, db: Session = Depends(get_db),
+@limiter.limit("20/minute")
+def verify_need(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     alert.verification = "confirmed_need"
@@ -297,7 +359,8 @@ def verify_need(alert_id: int, data: ActionNote, db: Session = Depends(get_db),
 
 
 @router.post("/{alert_id}/staff")
-def alert_staff(alert_id: int, data: StaffAlert, db: Session = Depends(get_db),
+@limiter.limit("10/minute")
+def alert_staff(request: Request, alert_id: int, data: StaffAlert, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     if not alert.claimed_by:
@@ -360,7 +423,8 @@ def staff_findings(alert_id: int, data: StaffFindings, db: Session = Depends(get
 
 
 @router.post("/{alert_id}/dispatch-medical")
-def dispatch_medical(alert_id: int, data: ActionNote, db: Session = Depends(get_db),
+@limiter.limit("10/minute")
+def dispatch_medical(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                      admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     alert.status = "medical_dispatched"
@@ -370,7 +434,8 @@ def dispatch_medical(alert_id: int, data: ActionNote, db: Session = Depends(get_
 
 
 @router.post("/{alert_id}/resolve")
-def resolve_alert(alert_id: int, data: ActionNote, db: Session = Depends(get_db),
+@limiter.limit("10/minute")
+def resolve_alert(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                   admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     alert.status = "resolved"
@@ -381,7 +446,8 @@ def resolve_alert(alert_id: int, data: ActionNote, db: Session = Depends(get_db)
 
 
 @router.post("/{alert_id}/close-false")
-def close_false(alert_id: int, data: FalseReport, db: Session = Depends(get_db),
+@limiter.limit("10/minute")
+def close_false(request: Request, alert_id: int, data: FalseReport, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
     alert = admin_alert(db, alert_id)
     if not alert.claimed_by:
@@ -395,7 +461,8 @@ def close_false(alert_id: int, data: FalseReport, db: Session = Depends(get_db),
 
 
 @router.get("/{alert_id}/events")
-def alert_events(alert_id: int, db: Session = Depends(get_db),
+@limiter.limit("30/minute")
+def alert_events(request: Request, alert_id: int, db: Session = Depends(get_db),
                  admin: User = Depends(require_roles(Role.admin))):
     admin_alert(db, alert_id)
     return [dict(action=e.action, note=e.note, actor_id=e.actor_id,
@@ -404,7 +471,8 @@ def alert_events(alert_id: int, db: Session = Depends(get_db),
 
 
 @router.get("/{alert_id}/messages")
-def messages(alert_id: int, x_alert_token: str | None = Header(default=None, alias="X-Alert-Token"),
+@limiter.limit("30/minute")
+def messages(request: Request, alert_id: int, x_alert_token: str | None = Header(default=None, alias="X-Alert-Token"),
              db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)):
     alert = admin_alert(db, alert_id)
     access_or_403(alert, user, x_alert_token)
@@ -413,7 +481,8 @@ def messages(alert_id: int, x_alert_token: str | None = Header(default=None, ali
 
 
 @router.post("/{alert_id}/messages")
-def send_message(alert_id: int, data: MessageIn,
+@limiter.limit("20/minute")
+def send_message(request: Request, alert_id: int, data: MessageIn,
                  x_alert_token: str | None = Header(default=None, alias="X-Alert-Token"),
                  db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)):
     alert = admin_alert(db, alert_id)

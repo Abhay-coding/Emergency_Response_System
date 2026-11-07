@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from enum import Enum
 
+from app.dependencies import get_client_ip
+
 
 class AuditEventType(str, Enum):
     USER_REGISTERED = "user_registered"
@@ -78,7 +80,8 @@ def log_security_event(
     """Convenience function to log security events with request context"""
     ip_address = None
     if request and hasattr(request, 'client'):
-        ip_address = request.client.host if request.client else None
+        # Use trusted proxy detection for real client IP
+        ip_address = get_client_ip(request)
 
     audit_logger.log(
         event_type=event_type,
