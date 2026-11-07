@@ -81,7 +81,7 @@ def test_xss_validation():
 def test_file_upload_validation():
     """Test file upload validation"""
     print("Testing file upload validation...")
-    from app.routers.incidents import validate_file_extension, validate_mime_type, validate_mime_type_with_python_magic
+    from app.services.storage import validate_file_extension, validate_mime_type_fallback, validate_mime_type_with_python_magic
     from fastapi import HTTPException
     from io import BytesIO
 
@@ -123,11 +123,11 @@ def test_file_upload_validation():
         except HTTPException:
             pass  # Expected
 
-    # Test magic byte validation (validate_mime_type)
+    # Test magic byte validation (validate_mime_type_fallback)
     for f in valid_files:
         try:
             f.file.seek(0)
-            validate_mime_type(f)
+            validate_mime_type_fallback(f)
         except HTTPException as e:
             print(f"  FAIL: Valid file rejected by magic bytes: {f.filename} - {e}")
             return False
@@ -136,7 +136,7 @@ def test_file_upload_validation():
     invalid_magic = MockUploadFile("test.exe", b"MZ")
     try:
         invalid_magic.file.seek(0)
-        validate_mime_type(invalid_magic)
+        validate_mime_type_fallback(invalid_magic)
         print("  FAIL: Invalid magic bytes accepted")
         return False
     except HTTPException:

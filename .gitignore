@@ -58,6 +58,7 @@ coverage.xml
 # Build
 dist/
 build/
+infra/cdk/cdk.out/
 *.egg-info/
 *.egg
 *.whl

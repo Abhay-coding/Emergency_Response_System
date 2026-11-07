@@ -4,16 +4,16 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.security import hash_password
 from app.database import get_db
 from app.dependencies import require_roles
 from app.models import CampusPlace, PlaceCoverage, Role, StaffContact, User
-from app.routers.medical_alerts import seed_places
 
 router = APIRouter(prefix="/campus", tags=["Campus medical response"])
 
@@ -45,19 +45,22 @@ def contact_view(c: StaffContact) -> dict:
 
 
 @router.get("/contacts")
-def contacts(db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
+@limiter.limit("30/minute")
+def contacts(request: Request, db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
     return [contact_view(c) for c in db.query(StaffContact).order_by(StaffContact.name).all()]
 
 
 @router.post("/contacts", status_code=201)
-def create_contact(data: ContactCreate, db: Session = Depends(get_db),
+@limiter.limit("10/minute")
+def create_contact(request: Request, data: ContactCreate, db: Session = Depends(get_db),
                    admin: User = Depends(require_roles(Role.admin))):
     if bool(data.email) != bool(data.password):
         raise HTTPException(422, "Provide both email and password for a staff login")
     user = None
     if data.email:
         if db.query(User).filter_by(email=str(data.email).lower()).first():
-            raise HTTPException(409, "Email already registered")
+            # Use generic error message to prevent email enumeration
+            raise HTTPException(status_code=409, detail="If this email is not registered, a confirmation will be sent")
         user = User(name=data.name, email=str(data.email).lower(),
                     password_hash=hash_password(data.password), role=Role.responder)
         db.add(user)
@@ -71,14 +74,22 @@ def create_contact(data: ContactCreate, db: Session = Depends(get_db),
 
 
 @router.patch("/contacts/{staff_id}")
-def update_contact(staff_id: int, data: ContactUpdate, db: Session = Depends(get_db),
+@limiter.limit("20/minute")
+def update_contact(request: Request, staff_id: int, data: ContactUpdate, db: Session = Depends(get_db),
                    admin: User = Depends(require_roles(Role.admin))):
     contact = db.get(StaffContact, staff_id)
     if not contact:
         raise HTTPException(404, "Contact not found")
-    for field in ("phone", "shift", "active"):
+
+    # Explicit field mapping to prevent SQL injection via setattr with user-controlled field names
+    allowed_fields = {
+        "phone": data.phone,
+        "shift": data.shift,
+        "active": data.active,
+    }
+
+    for field, value in allowed_fields.items():
         if field in data.model_fields_set:
-            value = getattr(data, field)
             if field != "phone" and value is None:
                 raise HTTPException(422, f"{field} cannot be null")
             setattr(contact, field, value)
@@ -87,7 +98,8 @@ def update_contact(staff_id: int, data: ContactUpdate, db: Session = Depends(get
 
 
 @router.post("/coverage", status_code=201)
-def set_coverage(data: CoverageCreate, db: Session = Depends(get_db),
+@limiter.limit("20/minute")
+def set_coverage(request: Request, data: CoverageCreate, db: Session = Depends(get_db),
                  admin: User = Depends(require_roles(Role.admin))):
     if not db.get(CampusPlace, data.place_id) or not db.get(StaffContact, data.staff_id):
         raise HTTPException(404, "Place or contact not found")
@@ -102,9 +114,9 @@ def set_coverage(data: CoverageCreate, db: Session = Depends(get_db),
 
 
 @router.get("/coverage/{place_id}")
-def coverage(place_id: int, db: Session = Depends(get_db),
+@limiter.limit("30/minute")
+def coverage(request: Request, place_id: int, db: Session = Depends(get_db),
              admin: User = Depends(require_roles(Role.admin))):
-    seed_places(db)
     if not db.get(CampusPlace, place_id):
         raise HTTPException(404, "Place not found")
     rows = db.query(PlaceCoverage, StaffContact).join(
@@ -119,7 +131,8 @@ def coverage(place_id: int, db: Session = Depends(get_db),
 
 
 @router.get("/operations")
-def operations(db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
+@limiter.limit("20/minute")
+def operations(request: Request, db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
     from app.models import NotificationJob
     failed = db.query(NotificationJob).filter_by(status="failed").count()
     return {

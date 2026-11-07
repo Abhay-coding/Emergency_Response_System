@@ -13,7 +13,13 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
-from app.database import Base, engine, get_db, init_db
+from app.core.constants import (
+    DEFAULT_ALLOWED_METHODS,
+    DEFAULT_ALLOWED_HEADERS,
+    DEFAULT_EXPOSE_HEADERS,
+)
+from app.core.config import settings
+from app.database import Base, engine, get_db, get_db_context, init_db
 from app import models
 from app.routers import auth, incidents, medical_alerts, campus
 import structlog
@@ -151,12 +157,26 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # Startup
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    if settings.environment == "production":
+    if settings.data_api_enabled:
+        logger.info("data_api_mode_enabled")
+    elif settings.environment == "production":
         from sqlalchemy import inspect
         if not inspect(engine).has_table("medical_alerts"):
             raise RuntimeError("Run Alembic migrations before starting the production API")
     else:
         init_db()
+
+    # Seed campus places once at startup
+    if not settings.data_api_enabled:
+        from app.database import SessionLocal
+        from app.routers.medical_alerts import seed_places
+        with SessionLocal() as db:
+            seed_places(db)
+
+    # Start token blacklist background cleanup thread (only once per process)
+    from app.core.token_blacklist import token_blacklist
+    token_blacklist.start_background_cleanup()
+
     logger.info("application_started", app_name=settings.app_name, environment=settings.environment)
     yield
     # Shutdown
@@ -198,21 +218,40 @@ async def add_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     return response
 
-# CORS - Configurable
+# CORS - Configurable with production validation
+if settings.environment == "production":
+    if not settings.cors_origins or "*" in settings.cors_origins:
+        raise RuntimeError("CORS origins must be explicitly configured for production (no wildcards)")
+    if not settings.allowed_hosts:
+        raise RuntimeError("allowed_hosts must be configured for production")
+    cors_origins = settings.cors_origins
+else:
+    # In development, use dev_cors_origins if cors_origins is not explicitly set
+    cors_origins = settings.cors_origins if settings.cors_origins else settings.dev_cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-    expose_headers=["X-Request-ID"],
+    allow_methods=DEFAULT_ALLOWED_METHODS,
+    allow_headers=DEFAULT_ALLOWED_HEADERS,
+    expose_headers=DEFAULT_EXPOSE_HEADERS,
 )
 
+# Allowed hosts middleware for production
+if settings.environment == "production" and settings.allowed_hosts:
+    from starlette.middleware.hosts import HostMiddleware
+    app.add_middleware(HostMiddleware, allowed_hosts=settings.allowed_hosts)
+
 # Include routers
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(incidents.router, prefix="/api/v1")
-app.include_router(medical_alerts.router, prefix="/api/v1")
-app.include_router(campus.router, prefix="/api/v1")
+if settings.data_api_enabled:
+    from app.routers import data_api_demo
+    app.include_router(data_api_demo.router, prefix="/api/v1")
+else:
+    app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(incidents.router, prefix="/api/v1")
+    app.include_router(medical_alerts.router, prefix="/api/v1")
+    app.include_router(campus.router, prefix="/api/v1")
 
 # Serve frontend static files (CSS, JS, images)
 frontend_dir = Path(__file__).parent.parent / "frontend"
@@ -248,13 +287,18 @@ async def root(request: Request):
 
 @app.get(settings.health_check_path, tags=["System"])
 @limiter.limit("120/minute")
-async def health(request: Request, db: Session = Depends(get_db)):
+async def health(request: Request):
     """Health check endpoint with database connectivity check"""
     # Check database connectivity
     db_healthy = False
     db_error = None
     try:
-        db.execute(text("SELECT 1"))
+        if settings.data_api_enabled:
+            from app.data_api_repository import get_repo
+            get_repo().query("SELECT 1")
+        else:
+            with get_db_context() as db:
+                db.execute(text("SELECT 1"))
         db_healthy = True
     except Exception as e:
         db_error = str(e)
@@ -264,7 +308,23 @@ async def health(request: Request, db: Session = Depends(get_db)):
     if settings.redis_url:
         try:
             import redis
-            r = redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+            # Enforce TLS in production
+            ssl_cert_reqs = None
+            if settings.environment == "production":
+                if not settings.redis_url.startswith("rediss://"):
+                    redis_healthy = False
+                    logger.warning("Redis URL must use rediss:// (TLS) in production")
+                else:
+                    ssl_cert_reqs = "required"
+            else:
+                ssl_cert_reqs = None
+
+            r = redis.from_url(
+                settings.redis_url,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+                ssl_cert_reqs=ssl_cert_reqs
+            )
             r.ping()
             redis_healthy = True
         except Exception:
@@ -306,10 +366,15 @@ async def metrics():
 # Readiness probe endpoint (for Kubernetes/ECS)
 @app.get("/ready", tags=["System"])
 @limiter.limit("60/minute")
-async def readiness(request: Request, db: Session = Depends(get_db)):
+async def readiness(request: Request):
     """Readiness probe - checks if app is ready to serve traffic"""
     try:
-        db.execute(text("SELECT 1"))
+        if settings.data_api_enabled:
+            from app.data_api_repository import get_repo
+            get_repo().query("SELECT 1")
+        else:
+            with get_db_context() as db:
+                db.execute(text("SELECT 1"))
         return {"status": "ready"}
     except Exception as e:
         return JSONResponse(

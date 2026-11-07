@@ -2,6 +2,7 @@
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 import jwt
+import ipaddress
 
 from app.core.security import decode_access_token, get_token_jti
 from app.core.token_blacklist import token_blacklist
@@ -10,6 +11,69 @@ from app.models import Role, User
 from app.core.config import settings
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+
+def get_client_ip(request: Request) -> str:
+    """Get the real client IP address, considering trusted proxies.
+
+    Only trust X-Forwarded-For if the direct client is in trusted_proxies.
+    This prevents IP spoofing by malicious clients sending fake headers.
+    """
+    trusted_proxies = settings.trusted_proxies
+    direct_client_ip = request.client.host if request.client else "unknown"
+
+    # If no trusted proxies configured, use direct client IP
+    if not trusted_proxies:
+        return direct_client_ip
+
+    # Verify the direct client is a trusted proxy
+    direct_client_trusted = False
+    try:
+        direct_ip = ipaddress.ip_address(direct_client_ip)
+        for proxy_cidr in trusted_proxies:
+            try:
+                network = ipaddress.ip_network(proxy_cidr, strict=False)
+                if direct_ip in network:
+                    direct_client_trusted = True
+                    break
+            except ValueError:
+                # Invalid CIDR, skip
+                continue
+    except ValueError:
+        # Invalid direct client IP
+        pass
+
+    if not direct_client_trusted:
+        # Direct client is not a trusted proxy - don't trust X-Forwarded-For
+        return direct_client_ip
+
+    # Direct client is trusted - parse X-Forwarded-For header
+    xff = request.headers.get("X-Forwarded-For")
+    if not xff:
+        return direct_client_ip
+
+    # Split by comma and strip spaces
+    ips = [ip.strip() for ip in xff.split(",")]
+
+    # Number of hops to trust (from the right)
+    trusted_hops = settings.proxy_headers_trusted_hops
+    if trusted_hops <= 0 or trusted_hops > len(ips):
+        trusted_hops = len(ips)
+
+    # The client IP is the first untrusted IP from the right
+    # Proxies are added from left to right, so we skip the rightmost trusted_hops
+    client_ip_idx = len(ips) - trusted_hops
+    if client_ip_idx < 0:
+        client_ip_idx = 0
+
+    client_ip = ips[client_ip_idx]
+
+    # Validate it's a valid IP
+    try:
+        ipaddress.ip_address(client_ip)
+        return client_ip
+    except ValueError:
+        return direct_client_ip
 
 
 def get_current_user(
@@ -73,6 +137,5 @@ def get_rate_limit_key(request: Request) -> str:
     if hasattr(request.state, "user") and request.state.user:
         return f"user:{request.state.user.id}"
 
-    # Fall back to IP address
-    from slowapi.util import get_remote_address
-    return f"ip:{get_remote_address(request)}"
+    # Fall back to IP address (using trusted proxy detection)
+    return f"ip:{get_client_ip(request)}"

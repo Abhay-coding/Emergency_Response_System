@@ -83,13 +83,15 @@ async function refreshStudent() {
   try {
     const alert=await api(`/medical-alerts/${state.active.id}/public`,{headers:activeHeaders()});
     renderStudentStatus(alert);
-    const messages=await api(`/medical-alerts/${state.active.id}/messages`,{headers:activeHeaders()});
-    renderMessages('student-messages',messages);
+    if (window.CER_CONFIG?.FEATURES?.ENABLE_MESSAGES) {
+      const messages=await api(`/medical-alerts/${state.active.id}/messages`,{headers:activeHeaders()});
+      renderMessages('student-messages',messages);
+    }
   } catch(e) { $('request-state').textContent=`Could not refresh request: ${e.message}`; $('request-state').classList.add('error'); }
 }
 
 function requestDeviceLocation() {
-  if (!state.active || !navigator.geolocation || !window.isSecureContext) return;
+  if (!window.CER_CONFIG?.FEATURES?.ENABLE_LOCATION_UPDATES || !state.active || !navigator.geolocation || !window.isSecureContext) return;
   navigator.geolocation.getCurrentPosition(async (pos)=>{
     try { await api(`/medical-alerts/${state.active.id}/location`,{method:'PATCH',headers:activeHeaders(),json:{latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy_m:pos.coords.accuracy}}); toast('Device location shared with the admin.'); }
     catch(e) { toast(`Location not shared: ${e.message}`,true); }
@@ -154,7 +156,7 @@ async function selectAlert(id) {
   $('staff-choice').addEventListener('change',()=>{const c=state.contacts.find(x=>x.id===Number($('staff-choice').value));const link=$('staff-call');link.classList.toggle('hidden',!c?.phone);if(c?.phone)link.href=phoneHref(c.phone);});
   $('staff-send').addEventListener('click',sendStaffAlert);
   $('admin-message-form').addEventListener('submit',sendAdminMessage);
-  await Promise.all([loadEvents(id),loadAdminMessages(id),loadSuggestions(alert.place_id,id)]);
+  await Promise.all([loadEvents(id),window.CER_CONFIG?.FEATURES?.ENABLE_MESSAGES?loadAdminMessages(id):Promise.resolve(),loadSuggestions(alert.place_id,id)]);
 }
 async function loadEvents(id) { try { const events=await api(`/medical-alerts/${id}/events`); if(state.selected!==id)return; $('event-list').innerHTML=events.length?events.map(e=>`<li><strong>${friendly(e.action)}</strong>${e.note?` · ${escapeHtml(e.note)}`:''}<small>${new Date(e.created_at).toLocaleString()}</small></li>`).join(''):'<li>No activity yet.</li>'; } catch(e){toast(e.message,true);} }
 async function loadAdminMessages(id) { try {const messages=await api(`/medical-alerts/${id}/messages`);if(state.selected===id)renderMessages('admin-messages',messages);}catch(e){toast(e.message,true);} }
@@ -162,12 +164,13 @@ async function loadSuggestions(placeId,id) { if(!placeId)return; try {const rows
 
 async function adminAction(action) {
   if(!state.selected)return; const note=$('action-note')?.value.trim()||'';
-  let body={note}; if(action==='close-false') body={reason:note};
+  const alert=state.alerts.find(a=>a.id===state.selected); const version=alert?.version;
+  let body={note,version}; if(action==='close-false') body={reason:note,version};
   if(action!=='claim' && note.length<(action==='close-false'?10:2)) {toast('Write a clear action note first.',true);$('action-note').focus();return;}
-  try {await api(`/medical-alerts/${state.selected}/${action}`,{method:'POST',json:action==='claim'?{}:body});toast('Action recorded.');await refreshAdmin();}
+  try {await api(`/medical-alerts/${state.selected}/${action}`,{method:'POST',json:action==='claim'?{version}:body});toast('Action recorded.');await refreshAdmin();}
   catch(e){toast(e.message,true);}
 }
-async function sendStaffAlert() { const staffId=Number($('staff-choice').value);if(!staffId){toast('Choose a staff contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId}});toast('Staff alert recorded. Delivery status appears in operations.');refreshAdmin();}catch(e){toast(e.message,true);} }
+async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a staff contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version}});toast('Demo notification recorded.');refreshAdmin();}catch(e){toast(e.message,true);} }
 async function sendAdminMessage(e) {e.preventDefault();const body=$('admin-message').value.trim();if(!body)return;try{await api(`/medical-alerts/${state.selected}/messages`,{method:'POST',json:{body}});$('admin-message').value='';loadAdminMessages(state.selected);}catch(err){toast(err.message,true);} }
 
 function renderContacts() {
