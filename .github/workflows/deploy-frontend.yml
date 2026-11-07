@@ -66,6 +66,9 @@ jobs:
               const version = this.API_VERSION;
               return `${base}${version}${path}`;
             },
+            isApiConfigured() {
+              return Boolean(this.API_BASE_URL) || !window.location.hostname.endsWith('.github.io');
+            },
             init() {
               const urlParams = new URLSearchParams(window.location.search);
               const apiUrlParam = urlParams.get('api_url');

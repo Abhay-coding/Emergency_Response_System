@@ -12,6 +12,9 @@ function toast(message, isError=false) { const el=$('toast'); el.textContent=mes
 function setBusy(button, busy, label) { button.disabled=busy; if (busy) { button.dataset.label=button.textContent; button.textContent=label; } else if (button.dataset.label) { button.textContent=button.dataset.label; delete button.dataset.label; } }
 
 async function api(path, options={}) {
+  if (window.CER_CONFIG?.isApiConfigured && !window.CER_CONFIG.isApiConfigured()) {
+    throw new Error('Live response service is not connected to this site. Call campus emergency services directly.');
+  }
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
   if (options.json !== undefined) { headers.set('Content-Type','application/json'); options.body=JSON.stringify(options.json); }
@@ -199,7 +202,9 @@ async function init(){
   $('logout').addEventListener('click',()=>{state.token=null;state.user=null;localStorage.removeItem('cer_token');showView();toast('Signed out.');});
   $('contact-form').addEventListener('submit',createContact);
   $('coverage-form').addEventListener('submit',saveCoverage);
-  try{const [places,config]=await Promise.all([api('/medical-alerts/places'),api('/medical-alerts/config')]);state.places=places;const options=places.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');$('place').insertAdjacentHTML('beforeend',options);$('coverage-place').innerHTML='<option value="">Choose place</option>'+places.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');if(config.campus_emergency_phone){const link=$('emergency-call');link.href=phoneHref(config.campus_emergency_phone);link.textContent=`Call campus emergency services: ${config.campus_emergency_phone}`;link.classList.remove('hidden');}}catch(e){toast(`Could not load campus places: ${e.message}`,true);}
+  if (window.CER_CONFIG?.isApiConfigured && !window.CER_CONFIG.isApiConfigured()) {
+    toast('Live response service is not connected. Call campus emergency services directly.', true);
+  } else { try{const [places,config]=await Promise.all([api('/medical-alerts/places'),api('/medical-alerts/config')]);state.places=places;const options=places.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');$('place').insertAdjacentHTML('beforeend',options);$('coverage-place').innerHTML='<option value="">Choose place</option>'+places.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');if(config.campus_emergency_phone){const link=$('emergency-call');link.href=phoneHref(config.campus_emergency_phone);link.textContent=`Call campus emergency services: ${config.campus_emergency_phone}`;link.classList.remove('hidden');}}catch(e){toast(`Could not load campus places: ${e.message}`,true);}}
   await restoreSession();showView();
   state.timer=setInterval(()=>{if(state.user?.role==='admin')refreshAdmin();else if(state.user?.role==='responder')refreshStaff();else if(state.active)refreshStudent();},5000);
 }

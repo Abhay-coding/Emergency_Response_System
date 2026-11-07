@@ -42,6 +42,12 @@ window.CER_CONFIG = {
     return `${base}${version}${path}`;
   },
 
+  // GitHub Pages is static. It needs an explicit HTTPS API URL before alert
+  // requests can be sent. Local FastAPI development keeps using same-origin.
+  isApiConfigured() {
+    return Boolean(this.API_BASE_URL) || !window.location.hostname.endsWith('.github.io');
+  },
+
   // Initialize config from environment or URL params (for easy testing)
   init() {
     // Check for URL parameter override (useful for testing)
