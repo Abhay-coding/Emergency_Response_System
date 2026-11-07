@@ -13,7 +13,7 @@ function setBusy(button, busy, label) { button.disabled=busy; if (busy) { button
 
 async function api(path, options={}) {
   if (window.CER_CONFIG?.isApiConfigured && !window.CER_CONFIG.isApiConfigured()) {
-    throw new Error('Live response service is not connected to this site.');
+    throw new Error('Live response service is not connected to this site');
   }
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
