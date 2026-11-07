@@ -1,0 +1,163 @@
+# GitHub Pages Deployment Workflow
+# This workflow builds and deploys the frontend to GitHub Pages
+# The frontend is a static SPA that communicates with a separate backend API
+
+name: Deploy Frontend to GitHub Pages
+
+on:
+  # Trigger on pushes to main branch
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-frontend.yml'
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'API Base URL (optional - override default)'
+        required: false
+        type: string
+
+# Permissions needed for GitHub Pages deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only allow one deployment at a time
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Build job
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify frontend files
+        run: |
+          ls -la frontend/
+          echo "Frontend files verified"
+
+      # Create a production config if API URL is provided
+      - name: Create production config
+        if: github.event.inputs.api_url != ''
+        run: |
+          cat > frontend/config.production.js << 'EOF'
+          // Auto-generated production config - DO NOT EDIT MANUALLY
+          window.CER_CONFIG = {
+            API_BASE_URL: '${{ github.event.inputs.api_url }}',
+            API_VERSION: '/api/v1',
+            FEATURES: {
+              ENABLE_GEOLOCATION: true,
+              ENABLE_NOTIFICATIONS: true,
+            },
+            BUILD: {
+              VERSION: '1.0.0',
+              BUILD_TIME: '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+              ENVIRONMENT: 'production',
+            },
+            getApiUrl(path) {
+              const base = this.API_BASE_URL || window.location.origin;
+              const version = this.API_VERSION;
+              return `${base}${version}${path}`;
+            },
+            init() {
+              const urlParams = new URLSearchParams(window.location.search);
+              const apiUrlParam = urlParams.get('api_url');
+              if (apiUrlParam) {
+                this.API_BASE_URL = apiUrlParam;
+              }
+              try {
+                const stored = localStorage.getItem('cer_api_url');
+                if (stored && !apiUrlParam) {
+                  this.API_BASE_URL = stored;
+                }
+              } catch (e) {}
+              console.log('[CER_CONFIG] Production config loaded:', {
+                API_BASE_URL: this.API_BASE_URL || '(same origin)',
+                ENVIRONMENT: this.BUILD.ENVIRONMENT,
+              });
+              return this;
+            },
+            setApiUrl(url) {
+              this.API_BASE_URL = url.replace(/\/$/, '');
+              try { localStorage.setItem('cer_api_url', this.API_BASE_URL); } catch (e) {}
+            },
+            clearApiUrl() {
+              this.API_BASE_URL = '';
+              try { localStorage.removeItem('cer_api_url'); } catch (e) {}
+            }
+          };
+          window.CER_CONFIG.init();
+          EOF
+          echo "Production config created"
+
+      # Copy frontend files to build output
+      - name: Prepare build artifacts
+        run: |
+          mkdir -p build
+          cp -r frontend/* build/
+          # If production config exists, use it instead of default config.js
+          if [ -f frontend/config.production.js ]; then
+            mv frontend/config.production.js build/config.js
+            echo "Using production config"
+          else
+            echo "Using default config (relative API paths)"
+          fi
+          # FastAPI serves assets under /static locally. GitHub Pages serves
+          # the copied files at the repository path, so make the artifact
+          # relative to its own directory.
+          sed -i 's|/static/|./|g' build/medical.html
+          # Create a simple index.html redirect for convenience
+          cat > build/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta http-equiv="refresh" content="0; url=medical.html">
+            <title>Redirecting...</title>
+          </head>
+          <body>
+            <p>Redirecting to <a href="medical.html">Campus Medical Assistance</a>...</p>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  # Deploy job
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Your frontend is now available at: ${{ steps.deployment.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: Static SPA (medical.html + medical.js + config.js)" >> $GITHUB_STEP_SUMMARY
+          echo "- API Base URL: ${{ github.event.inputs.api_url || 'Same origin (relative paths)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Ensure your backend API is deployed and accessible" >> $GITHUB_STEP_SUMMARY
+          echo "2. Configure CORS on your API to allow requests from \`${{ steps.deployment.outputs.page_url }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Test the frontend by visiting the deployed URL" >> $GITHUB_STEP_SUMMARY
+          echo "4. To change API URL, re-run workflow with \`api_url\` input" >> $GITHUB_STEP_SUMMARY

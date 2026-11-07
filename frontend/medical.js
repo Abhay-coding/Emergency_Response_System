@@ -15,7 +15,9 @@ async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
   if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
   if (options.json !== undefined) { headers.set('Content-Type','application/json'); options.body=JSON.stringify(options.json); }
-  const res=await fetch(`/api/v1${path}`, {...options,headers});
+  // Use config for API URL (supports GitHub Pages deployment with separate API)
+  const apiBaseUrl = window.CER_CONFIG?.getApiUrl ? window.CER_CONFIG.getApiUrl(path) : `/api/v1${path}`;
+  const res=await fetch(apiBaseUrl, {...options,headers});
   const data=await res.json().catch(()=>({}));
   if (!res.ok) {
     const detail=typeof data.detail==='string' ? data.detail : `Request failed (${res.status})`;
