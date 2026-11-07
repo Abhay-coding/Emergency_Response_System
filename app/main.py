@@ -2,18 +2,20 @@
 from pathlib import Path
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from pathlib import Path
 
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.database import Base, engine, get_db, init_db
 from app import models
-from app.routers import auth, incidents
+from app.routers import auth, incidents, medical_alerts, campus
 import structlog
 import time
 
@@ -77,8 +79,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self' https://cdn.jsdelivr.net; "
                 "connect-src 'self'"
             )
+        elif request.url.path in {"/", "/index.html"}:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            )
         else:
-            # Strict CSP for API endpoints - no unsafe-inline for scripts
+            # Strict CSP for API endpoints
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; "
                 "frame-ancestors 'none'; "
@@ -95,7 +107,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # X-XSS-Protection (legacy but still useful)
         response.headers["X-XSS-Protection"] = "1; mode=block"
         # Permissions policy
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["Permissions-Policy"] = "geolocation=(self), microphone=(), camera=()"
         # Cross-Origin-Opener-Policy
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         # Cross-Origin-Resource-Policy
@@ -139,7 +151,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # Startup
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    init_db()
+    if settings.environment == "production":
+        from sqlalchemy import inspect
+        if not inspect(engine).has_table("medical_alerts"):
+            raise RuntimeError("Run Alembic migrations before starting the production API")
+    else:
+        init_db()
     logger.info("application_started", app_name=settings.app_name, environment=settings.environment)
     yield
     # Shutdown
@@ -149,7 +166,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
-    description="Campus incident reporting and response API",
+    description="Campus medical assistance request and response API",
     version="1.0.0",
     lifespan=lifespan,
     # Disable docs in production unless explicitly enabled
@@ -194,11 +211,32 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(incidents.router, prefix="/api/v1")
+app.include_router(medical_alerts.router, prefix="/api/v1")
+app.include_router(campus.router, prefix="/api/v1")
+
+# Serve frontend static files (CSS, JS, images)
+frontend_dir = Path(__file__).parent.parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 
-@app.get("/", tags=["System"])
+@app.get("/style.css", include_in_schema=False)
+async def frontend_stylesheet():
+    return FileResponse(frontend_dir / "style.css", media_type="text/css")
+
+
+@app.get("/app.js", include_in_schema=False)
+async def frontend_script():
+    return FileResponse(frontend_dir / "app.js", media_type="application/javascript")
+
+
+@app.get("/", tags=["System"], include_in_schema=False)
 @limiter.limit("60/minute")
-def home(request: Request):
+async def root(request: Request):
+    """Serve the frontend SPA"""
+    index_file = frontend_dir / "medical.html"
+    if index_file.exists():
+        return FileResponse(index_file)
     return {
         "message": settings.app_name,
         "version": "1.0.0",
@@ -268,7 +306,7 @@ async def metrics():
 # Readiness probe endpoint (for Kubernetes/ECS)
 @app.get("/ready", tags=["System"])
 @limiter.limit("60/minute")
-async def readiness(db: Session = Depends(get_db)):
+async def readiness(request: Request, db: Session = Depends(get_db)):
     """Readiness probe - checks if app is ready to serve traffic"""
     try:
         db.execute(text("SELECT 1"))

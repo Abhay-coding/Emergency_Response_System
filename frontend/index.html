@@ -1,175 +1,480 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#101827">
-  <title>Campus Emergency Response</title>
+  <meta name="theme-color" content="#DC2626">
+  <meta name="description" content="Request and track campus medical assistance.">
+  <title>Campus Medical Assistance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23DC2626'/%3E%3Cpath d='M16 8V20M8 16H24' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="#">
-      <span class="brand-icon">✚</span>
-      <span>Campus<span class="muted">Response</span></span>
+  <!-- Skip link for accessibility -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- Theme toggle will be inserted by JS -->
+  <header class="topbar" role="banner">
+    <a class="brand" href="./" aria-label="Campus Medical Assistance - Home">
+      <span class="brand-icon" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="4"/>
+          <path d="M12 8v8M8 12h8"/>
+        </svg>
+      </span>
+      <span>Campus<span class="brand-muted">Medical</span></span>
     </a>
-    <div class="header-right">
-      <span id="user-label">Not signed in</span>
-      <button id="logout-button" class="button secondary hidden">Log out</button>
+    <div class="header-right" role="navigation" aria-label="User actions">
+      <div id="theme-toggle-container" class="theme-toggle-wrapper"></div>
+      <span id="user-label" class="user-label" aria-live="polite">Not signed in</span>
+      <div id="user-menu" class="user-menu hidden" role="menu" aria-label="User menu">
+        <div class="user-menu-header">
+          <div class="user-avatar" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div class="user-info">
+            <span id="user-name" class="user-name">User</span>
+            <span id="user-email" class="user-email">user@example.com</span>
+          </div>
+        </div>
+        <div class="user-menu-divider"></div>
+        <button id="profile-btn" class="user-menu-item" role="menuitem" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          Profile
+        </button>
+        <button id="settings-btn" class="user-menu-item" role="menuitem" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 1 4.6 9a1.65 1.65 0 0 0 .33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 1 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 1-1.51 1z"/>
+          </svg>
+          Settings
+        </button>
+        <div class="user-menu-divider"></div>
+        <button id="logout-menu-btn" class="user-menu-item user-menu-item--danger" role="menuitem" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          Sign out
+        </button>
+      </div>
+      <button id="logout-button" class="button button--secondary button--icon-only hidden" aria-label="Sign out" hidden>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
     </div>
   </header>
 
-  <main class="container">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">CAMPUS SAFETY PLATFORM</p>
-        <h1>Emergency response,<br><span class="accent">connected.</span></h1>
-        <p class="hero-copy">
-          Report incidents, track response progress and help make campus safer.
-        </p>
-      </div>
-      <div class="hero-symbol" aria-hidden="true">✚</div>
-    </section>
+  <main id="main-content" class="container" role="main">
+    <div id="local-file-notice" class="local-file-notice hidden" role="alert">
+      <strong>Open the running app to request help.</strong> This local file shows the interface only. From the project folder, run <code>python -m uvicorn app.main:app --reload</code>, then open <code>http://127.0.0.1:8000/</code>.
+    </div>
+    <!-- Toast container -->
+    <div id="toast-container" class="toast-container" role="region" aria-label="Notifications" aria-live="polite"></div>
 
-    <div id="notice" class="notice hidden" role="status"></div>
-
-    <section id="auth-section" class="panel auth-panel">
-      <div class="section-heading">
+    <!-- Auth Section -->
+    <section id="auth-section" class="panel auth-panel" aria-labelledby="auth-heading">
+      <div class="section-header">
         <div>
           <p class="eyebrow">GET STARTED</p>
-          <h2>Welcome</h2>
+          <h1 id="auth-heading">Campus medical assistance</h1>
         </div>
-        <span class="status-dot">● Secure access</span>
+        <span class="status-indicator" aria-hidden="true">
+          <span class="status-dot"></span>
+          Secure access
+        </span>
       </div>
 
-      <div class="tabs">
-        <button id="login-tab" class="tab active" type="button">Sign in</button>
-        <button id="register-tab" class="tab" type="button">Create account</button>
+      <div class="tabs" role="tablist" aria-label="Authentication mode">
+        <button id="login-tab" class="tab tab--active" role="tab" aria-selected="true" aria-controls="login-fields" tabindex="0">Sign in</button>
+        <button id="register-tab" class="tab" role="tab" aria-selected="false" aria-controls="register-fields" tabindex="-1">Create account</button>
       </div>
 
-      <form id="auth-form">
-        <label id="name-label" class="hidden" for="name">Full name</label>
-        <input id="name" class="hidden" name="name" autocomplete="name"
-               placeholder="Your full name">
-
-        <label for="email">Email address</label>
-        <input id="email" name="email" type="email" autocomplete="username"
-               placeholder="you@example.com" required>
-
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password"
-               autocomplete="current-password" minlength="8"
-               placeholder="Enter your password" required>
-
-        <button id="auth-submit" class="button primary full" type="submit">
-          Sign in
-        </button>
-      </form>
-      <p class="hint">Use your test account to explore the local prototype.</p>
-    </section>
-
-    <section id="dashboard" class="hidden">
-      <div class="section-heading dashboard-heading">
-        <div>
-          <p class="eyebrow">OVERVIEW</p>
-          <h2>Incident dashboard</h2>
+      <form id="auth-form" novalidate>
+        <!-- Error summary for accessibility -->
+        <div id="form-error-summary" class="error-summary hidden" role="alert" aria-labelledby="error-summary-title" tabindex="-1">
+          <h2 id="error-summary-title" class="visually-hidden">There is a problem</h2>
+          <ul id="error-summary-list"></ul>
         </div>
-        <button id="refresh-button" class="button secondary" type="button">
-          ↻ Refresh
-        </button>
-      </div>
 
-      <div class="stats">
-        <article class="stat-card">
-          <span>Total incidents</span>
-          <strong id="total-count">0</strong>
-        </article>
-        <article class="stat-card">
-          <span>Reported</span>
-          <strong id="reported-count">0</strong>
-        </article>
-        <article class="stat-card">
-          <span>In progress</span>
-          <strong id="progress-count">0</strong>
-        </article>
-        <article class="stat-card">
-          <span>Resolved</span>
-          <strong id="resolved-count">0</strong>
-        </article>
-      </div>
+        <!-- Register fields (hidden by default) -->
+        <div id="register-fields" class="hidden">
+          <div class="form-field">
+            <label for="name">Full name <span class="required-indicator" aria-hidden="true">*</span></label>
+            <input id="name" name="name" type="text" autocomplete="name" placeholder="Your full name" aria-describedby="name-error name-hint" aria-required="true" required>
+            <p id="name-hint" class="field-hint">Your full name as it should appear</p>
+            <p id="name-error" class="field-error hidden" aria-live="polite"></p>
+          </div>
+        </div>
 
-      <div class="content-grid">
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">NEW REPORT</p>
-              <h2>Report an incident</h2>
-            </div>
+        <!-- Login fields (shown by default) -->
+        <div id="login-fields">
+          <div class="form-field">
+            <label for="email">Email address <span class="required-indicator" aria-hidden="true">*</span></label>
+            <input id="email" name="email" type="email" autocomplete="username" placeholder="you@example.com" aria-describedby="email-error" aria-required="true" required>
+            <p id="email-error" class="field-error hidden" aria-live="polite"></p>
           </div>
 
-          <form id="incident-form">
-            <label for="title">Incident title</label>
-            <input id="title" name="title" maxlength="150"
-                   placeholder="e.g. Medical assistance required" required>
+          <div class="form-field">
+            <label for="password">Password <span class="required-indicator" aria-hidden="true">*</span></label>
+            <div class="password-wrapper">
+              <input id="password" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="Enter your password" aria-describedby="password-error password-hint" aria-required="true" required>
+              <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false">
+                <svg class="icon-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                <svg class="icon-eye-off hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M2 2l20 20"/>
+                </svg>
+              </button>
+            </div>
+            <p id="password-hint" class="field-hint">Min 8 chars: uppercase, lowercase, number, special (@$!%*?&)</p>
+            <p id="password-error" class="field-error hidden" aria-live="polite"></p>
+          </div>
+        </div>
 
-            <label for="category">Category</label>
-            <select id="category" name="category" required>
-              <option value="Medical">Medical</option>
-              <option value="Fire">Fire</option>
-              <option value="Security">Security</option>
-              <option value="Infrastructure">Infrastructure</option>
-              <option value="Other">Other</option>
-            </select>
+        <button id="auth-submit" class="button button--primary button--full" type="submit">
+          <span class="button-text">Sign in</span>
+          <span class="button-loader hidden" aria-hidden="true">
+            <svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+              <path d="M12 2a10 10 0 0 1 10 10" stroke-opacity="1"/>
+            </svg>
+          </span>
+        </button>
+      </form>
+      <p class="form-hint">Sign in to request medical assistance and track your reports.</p>
+    </section>
 
-            <label for="location">Location on campus</label>
-            <input id="location" name="location" maxlength="200"
-                   placeholder="e.g. Central Library" required>
-
-            <label for="priority">Priority</label>
-            <select id="priority" name="priority" required>
-              <option value="low">Low</option>
-              <option value="medium" selected>Medium</option>
-              <option value="high">High</option>
-              <option value="critical">Critical</option>
-            </select>
-
-            <label for="description">Description</label>
-            <textarea id="description" name="description" rows="4"
-                      maxlength="3000" placeholder="Describe what happened..."
-                      required></textarea>
-
-            <button class="button primary full" type="submit">
-              Submit incident
+    <!-- Dashboard Section -->
+    <section id="dashboard" class="hidden" aria-labelledby="dashboard-heading">
+      <!-- Header with stats summary -->
+      <div class="dashboard-header-section">
+        <div class="section-header dashboard-header">
+          <div>
+            <p class="eyebrow">OVERVIEW</p>
+            <h2 id="dashboard-heading">Medical assistance dashboard</h2>
+          </div>
+          <div class="dashboard-actions">
+            <button id="refresh-button" class="button button--secondary button--icon-only" type="button" aria-label="Refresh medical requests">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M23 4v6h-6"/>
+                <path d="M1 20v-6h6"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
             </button>
+            <div class="filter-group">
+              <label for="status-filter" class="visually-hidden">Filter by status</label>
+              <select id="status-filter" class="select--sm" aria-label="Filter by status">
+                <option value="">All statuses</option>
+                <option value="reported">Reported</option>
+                <option value="assigned">Assigned</option>
+                <option value="in_progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+              </select>
+              <label for="priority-filter" class="visually-hidden">Filter by priority</label>
+              <select id="priority-filter" class="select--sm" aria-label="Filter by priority">
+                <option value="">All priorities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <label for="sort-by" class="visually-hidden">Sort by</label>
+              <select id="sort-by" class="select--sm" aria-label="Sort by">
+                <option value="created_desc">Newest first</option>
+                <option value="created_asc">Oldest first</option>
+                <option value="priority_desc">Priority (high to low)</option>
+                <option value="priority_asc">Priority (low to high)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid" role="region" aria-label="Medical request statistics">
+          <article class="stat-card stat-card--total" tabindex="0">
+            <span class="stat-label">Medical requests</span>
+            <strong id="total-count" class="stat-value">0</strong>
+          </article>
+          <article class="stat-card stat-card--reported" tabindex="0">
+            <span class="stat-label">Reported</span>
+            <strong id="reported-count" class="stat-value">0</strong>
+            <span class="stat-badge badge badge--status badge--reported">Open</span>
+          </article>
+          <article class="stat-card stat-card--progress" tabindex="0">
+            <span class="stat-label">In Progress</span>
+            <strong id="progress-count" class="stat-value">0</strong>
+            <span class="stat-badge badge badge--status badge--assigned">Active</span>
+          </article>
+          <article class="stat-card stat-card--resolved" tabindex="0">
+            <span class="stat-label">Resolved</span>
+            <strong id="resolved-count" class="stat-value">0</strong>
+            <span class="stat-badge badge badge--status badge--resolved">Done</span>
+          </article>
+        </div>
+      </div>
+
+      <!-- Content Grid: Create Incident + Incident List -->
+      <div class="content-grid">
+        <!-- Create Incident Panel -->
+        <section class="panel panel--create" aria-labelledby="create-heading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">REQUEST HELP</p>
+              <h2 id="create-heading">Request medical assistance</h2>
+            </div>
+            <span class="form-progress" aria-live="polite">
+              <span id="form-completion">0%</span> complete
+            </span>
+          </div>
+
+          <form id="incident-form" novalidate>
+            <!-- Error summary for accessibility -->
+            <div id="incident-error-summary" class="error-summary hidden" role="alert" aria-labelledby="incident-error-title" tabindex="-1">
+              <h2 id="incident-error-title" class="visually-hidden">There is a problem</h2>
+              <ul id="incident-error-list"></ul>
+            </div>
+
+            <!-- Form Progress Steps -->
+            <div class="form-steps" role="list" aria-label="Form progress">
+              <div class="form-step" data-step="1" aria-current="step">
+                <span class="step-number">1</span>
+                <span class="step-label">Situation</span>
+              </div>
+              <div class="form-step" data-step="2">
+                <span class="step-number">2</span>
+                <span class="step-label">Location</span>
+              </div>
+              <div class="form-step" data-step="3">
+                <span class="step-number">3</span>
+                <span class="step-label">Photo</span>
+              </div>
+              <div class="form-step" data-step="4">
+                <span class="step-number">4</span>
+                <span class="step-label">Submit</span>
+              </div>
+            </div>
+
+            <!-- Step 1: Details -->
+            <fieldset class="form-step-content" data-step="1" aria-labelledby="step1-legend">
+              <legend id="step1-legend" class="visually-hidden">Medical situation</legend>
+              <div class="form-field">
+                <label for="title">What help is needed? <span class="required-indicator" aria-hidden="true">*</span></label>
+                <input id="title" name="title" type="text" maxlength="150" placeholder="e.g. Student needs medical help at Central Library" aria-describedby="title-error title-hint" aria-required="true" required>
+                <div class="field-feedback">
+                  <p id="title-hint" class="field-hint">Briefly describe the medical need (max 150 characters)</p>
+                  <div class="char-count"><span id="title-count">0</span>/150</div>
+                </div>
+                <p id="title-error" class="field-error hidden" aria-live="polite"></p>
+              </div>
+
+              <input id="category" name="category" type="hidden" value="Medical">
+              <div class="form-row">
+                <div class="form-field">
+                  <label for="priority">Urgency <span class="required-indicator" aria-hidden="true">*</span></label>
+                  <select id="priority" name="priority" aria-describedby="priority-error priority-hint" aria-required="true" required>
+                    <option value="">Select urgency</option>
+                    <option value="low">🟢 Low</option>
+                    <option value="medium">🟡 Medium</option>
+                    <option value="high">🟠 High</option>
+                    <option value="critical">🔴 Critical</option>
+                  </select>
+                  <p id="priority-hint" class="field-hint">Choose how urgently assistance is needed</p>
+                  <p id="priority-error" class="field-error hidden" aria-live="polite"></p>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label for="description">What is happening? <span class="required-indicator" aria-hidden="true">*</span></label>
+                <textarea id="description" name="description" rows="4" maxlength="3000" placeholder="Describe the symptoms or injury, the person's condition, and any immediate danger..." aria-describedby="description-error description-hint" aria-required="true" required></textarea>
+                <div class="field-feedback">
+                  <p id="description-hint" class="field-hint">Share the details responders need to find and assist the person (max 3000 characters)</p>
+                  <div class="char-count"><span id="description-count">0</span>/3000</div>
+                </div>
+                <p id="description-error" class="field-error hidden" aria-live="polite"></p>
+              </div>
+            </fieldset>
+
+            <!-- Step 2: Location -->
+            <fieldset class="form-step-content hidden" data-step="2" aria-labelledby="step2-legend">
+              <legend id="step2-legend" class="visually-hidden">Location Details</legend>
+              <div class="form-field">
+                <label for="location">Where is the person? <span class="required-indicator" aria-hidden="true">*</span></label>
+                <input id="location" name="location" type="text" maxlength="200" placeholder="e.g. Central Library, Building A, Room 204" aria-describedby="location-error location-hint" aria-required="true" required>
+                <div class="field-feedback">
+                  <p id="location-hint" class="field-hint">Be specific: building, floor, room, landmark</p>
+                  <div class="char-count"><span id="location-count">0</span>/200</div>
+                </div>
+                <p id="location-error" class="field-error hidden" aria-live="polite"></p>
+              </div>
+
+            </fieldset>
+
+            <!-- Step 3: Media -->
+            <fieldset class="form-step-content hidden" data-step="3" aria-labelledby="step3-legend">
+              <legend id="step3-legend" class="visually-hidden">Optional photo</legend>
+              <div class="form-field">
+                <label for="image-upload">Attach a photo if it helps responders</label>
+                <div class="file-upload" id="file-upload">
+                  <input id="image-upload" name="image" type="file" accept="image/jpeg,image/png,image/webp" aria-describedby="image-hint image-upload-error">
+                  <div class="file-upload-content">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p class="file-upload-text">Drag & drop a photo here, or click to browse</p>
+                    <p class="file-upload-hint">JPEG, PNG, WebP up to 5MB</p>
+                  </div>
+                  <div id="image-preview" class="image-preview hidden">
+                    <img id="preview-image" src="" alt="Preview">
+                    <button type="button" class="image-remove" aria-label="Remove image">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                  <p id="image-hint" class="field-hint">JPEG, PNG, WebP up to 5MB. Max 1 image.</p>
+                  <p id="image-upload-error" class="field-error hidden" aria-live="polite"></p>
+                </div>
+              </div>
+            </fieldset>
+
+            <!-- Step 4: Review & Submit -->
+            <fieldset class="form-step-content hidden" data-step="4" aria-labelledby="step4-legend">
+              <legend id="step4-legend" class="visually-hidden">Review & Submit</legend>
+              <div class="review-summary">
+                <h4>Review your medical request</h4>
+                <dl class="review-list">
+                  <dt>Title</dt>
+                  <dd id="review-title">—</dd>
+                  <dt>Urgency</dt>
+                  <dd id="review-priority">—</dd>
+                  <dt>Location</dt>
+                  <dd id="review-location">—</dd>
+                  <dt>Situation</dt>
+                  <dd id="review-description">—</dd>
+                  <dt>Image</dt>
+                  <dd id="review-image">No image</dd>
+                </dl>
+              </div>
+              <div class="form-actions">
+                <button type="button" id="prev-step" class="button button--secondary">← Back</button>
+                <button type="submit" class="button button--primary button--full">
+                  <span class="button-text">Send medical request</span>
+                  <span class="button-loader hidden" aria-hidden="true">
+                    <svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke-opacity="1"/>
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </fieldset>
+
+            <!-- Form Navigation -->
+            <div class="form-navigation" role="navigation" aria-label="Form navigation">
+              <button type="button" id="prev-step-btn" class="button button--secondary hidden" disabled>← Previous</button>
+              <button type="button" id="next-step-btn" class="button button--primary">Next →</button>
+            </div>
           </form>
-          <p class="hint">
-            Prototype only. For a real emergency, contact campus security or
-            local emergency services directly.
+          <p class="form-hint form-hint--warning">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Prototype only. If someone needs immediate help, contact campus medical services or local emergency services directly.
           </p>
         </section>
 
-        <section class="panel incidents-panel">
-          <div class="section-heading">
+        <!-- Incident List Panel -->
+        <section class="panel panel--list" aria-labelledby="list-heading">
+          <div class="section-header">
             <div>
-              <p class="eyebrow">LIVE RECORDS</p>
-              <h2>Incident reports</h2>
+              <p class="eyebrow">YOUR REQUESTS</p>
+              <h2 id="list-heading">Medical requests</h2>
             </div>
-            <span id="incident-count" class="count-pill">0 records</span>
+            <span id="incident-count" class="count-pill" aria-live="polite">0 records</span>
           </div>
 
-          <div id="incident-list" class="incident-list">
-            <div class="empty-state">Loading incidents…</div>
+          <div id="incident-list" class="incident-list" role="list" aria-label="Medical requests">
+            <!-- Skeleton loaders will be inserted here -->
+            <div class="empty-state" aria-hidden="true">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              <p>No medical requests yet</p>
+              <p class="empty-hint">Use the form to request assistance</p>
+            </div>
           </div>
         </section>
       </div>
     </section>
 
-    <footer>
-      <span>Campus Response · Academic project prototype</span>
+    <footer class="footer" role="contentinfo">
+      <span>Campus Medical · Academic project prototype</span>
       <span>Cloud-ready architecture</span>
     </footer>
   </main>
+
+  <!-- Keyboard shortcuts modal -->
+  <dialog id="shortcuts-modal" class="modal" aria-labelledby="shortcuts-title" aria-modal="true">
+    <div class="modal-content">
+      <header class="modal-header">
+        <h3 id="shortcuts-title">Keyboard Shortcuts</h3>
+        <button class="modal-close" aria-label="Close shortcuts" type="button">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <div class="shortcut-group">
+          <h4>Navigation</h4>
+          <dl class="shortcut-list">
+            <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+            <dt><kbd>Alt</kbd>+<kbd>1</kbd></dt><dd>Focus incident form</dd>
+            <dt><kbd>Alt</kbd>+<kbd>2</kbd></dt><dd>Focus incident list</dd>
+            <dt><kbd>Alt</kbd>+<kbd>R</kbd></dt><dd>Refresh medical requests</dd>
+          </dl>
+        </div>
+        <div class="shortcut-group">
+          <h4>Forms</h4>
+          <dl class="shortcut-list">
+            <dt><kbd>Tab</kbd></dt><dd>Next field</dd>
+            <dt><kbd>Shift</kbd>+<kbd>Tab</kbd></dt><dd>Previous field</dd>
+            <dt><kbd>Enter</kbd></dt><dd>Submit form</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Close modal / cancel</dd>
+          </dl>
+        </div>
+        <div class="shortcut-group">
+          <h4>Medical requests</h4>
+          <dl class="shortcut-list">
+            <dt><kbd>J</kbd> / <kbd>↓</kbd></dt><dd>Next request</dd>
+            <dt><kbd>K</kbd> / <kbd>↑</kbd></dt><dd>Previous request</dd>
+            <dt><kbd>Enter</kbd></dt><dd>View request details</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay" class="loading-overlay hidden" role="alert" aria-live="assertive" aria-hidden="true">
+    <div class="loading-content">
+      <svg class="spinner-large" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+        <path d="M12 2a10 10 0 0 1 10 10" stroke-opacity="1"/>
+      </svg>
+      <p id="loading-text">Loading...</p>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

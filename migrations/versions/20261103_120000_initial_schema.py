@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column('email', sa.String(length=255), nullable=False),
         sa.Column('password_hash', sa.String(length=255), nullable=False),
         sa.Column('role', sa.Enum('reporter', 'responder', 'admin', name='role'), nullable=False, server_default='reporter'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('email')
     )
@@ -46,7 +46,7 @@ def upgrade() -> None:
         sa.Column('reporter_id', sa.Integer(), nullable=False),
         sa.Column('assigned_to', sa.Integer(), nullable=True),
         sa.Column('image_path', sa.String(length=500), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
         sa.Column('assigned_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('resolved_at', sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(['assigned_to'], ['users.id'], ondelete='SET NULL'),
@@ -68,7 +68,7 @@ def upgrade() -> None:
         sa.Column('family_id', sa.String(length=64), nullable=False),
         sa.Column('current_jti', sa.String(length=64), nullable=True),
         sa.Column('revoked', sa.Boolean(), nullable=False, server_default='false'),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
         sa.Column('revoked_at', sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),

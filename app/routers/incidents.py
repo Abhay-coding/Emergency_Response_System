@@ -228,16 +228,21 @@ def list_incidents(
     offset: int = Query(0, ge=0),
     status: Optional[IncidentStatus] = None,
     priority: Optional[IncidentPriority] = None,
+    category: Optional[str] = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     query = db.query(Incident)
     if user.role == Role.reporter:
         query = query.filter(Incident.reporter_id == user.id)
+    elif user.role == Role.responder:
+        query = query.filter(Incident.assigned_to == user.id)
     if status:
         query = query.filter(Incident.status == status)
     if priority:
         query = query.filter(Incident.priority == priority)
+    if category:
+        query = query.filter(Incident.category == category)
 
     total = query.count()
     incidents = query.order_by(Incident.created_at.desc()).limit(limit).offset(offset).all()
@@ -254,7 +259,7 @@ def get_incident(
     incident = db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    if user.role == Role.reporter and incident.reporter_id != user.id:
+    if (user.role == Role.reporter and incident.reporter_id != user.id) or (user.role == Role.responder and incident.assigned_to != user.id):
         raise HTTPException(status_code=403, detail="Not permitted")
     return incident
 
@@ -271,7 +276,7 @@ def upload_incident_image(
     incident = db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    if user.role == Role.reporter and incident.reporter_id != user.id:
+    if (user.role == Role.reporter and incident.reporter_id != user.id) or (user.role == Role.responder and incident.assigned_to != user.id):
         raise HTTPException(status_code=403, detail="Not permitted")
 
     path = save_upload(file, incident_id)
@@ -303,7 +308,7 @@ def get_incident_image(
     incident = db.get(Incident, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    if user.role == Role.reporter and incident.reporter_id != user.id:
+    if (user.role == Role.reporter and incident.reporter_id != user.id) or (user.role == Role.responder and incident.assigned_to != user.id):
         raise HTTPException(status_code=403, detail="Not permitted")
     if not incident.image_path:
         raise HTTPException(status_code=404, detail="No image for this incident")
@@ -381,6 +386,7 @@ def update_status(
     if data.status == IncidentStatus.reported:
         raise HTTPException(status_code=400, detail="Cannot revert to reported")
 
+    old_status = incident.status.value
     incident.status = data.status
     if data.status == IncidentStatus.resolved:
         incident.resolved_at = datetime.now(timezone.utc)
@@ -394,7 +400,7 @@ def update_status(
         request=None,
         details={
             "incident_id": incident.id,
-            "old_status": incident.status.value,
+            "old_status": old_status,
             "new_status": data.status.value,
             "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
         },

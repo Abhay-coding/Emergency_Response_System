@@ -14,6 +14,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
+    libmagic-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -52,6 +53,9 @@ WORKDIR /app
 
 # Copy application code
 COPY --chown=appuser:appuser app/ ./app/
+COPY --chown=appuser:appuser frontend/ ./frontend/
+COPY --chown=appuser:appuser migrations/ ./migrations/
+COPY --chown=appuser:appuser alembic.ini ./alembic.ini
 COPY --chown=appuser:appuser requirements.txt .
 
 # Create uploads directory

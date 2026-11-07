@@ -1,0 +1,16 @@
+{
+  "serviceName": "emergency-response-worker",
+  "taskDefinition": "emergency-response-worker",
+  "cluster": "emergency-response-cluster",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-xxxxxxxx", "subnet-yyyyyyyy"],
+      "securityGroups": ["sg-xxxxxxxx"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "enableECSManagedTags": true,
+  "propagateTags": "TASK_DEFINITION"
+}

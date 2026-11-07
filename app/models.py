@@ -1,6 +1,6 @@
 ﻿from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, Boolean, Index
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, Boolean, Index, Float, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -111,3 +111,108 @@ class TokenFamily(Base):
         Index("ix_token_families_user_revoked", "user_id", "revoked"),
         Index("ix_token_families_family_revoked", "family_id", "revoked"),
     )
+
+
+class CampusPlace(Base):
+    __tablename__ = "campus_places"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(30), default="building")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class MedicalAlert(Base):
+    __tablename__ = "medical_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reporter_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(20), default="self")
+    guest_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    guest_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True)
+    verification: Mapped[str] = mapped_column(String(30), default="unverified")
+    place_id: Mapped[int | None] = mapped_column(ForeignKey("campus_places.id"), nullable=True)
+    location_text: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    callback_phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    details: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    claimed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StaffContact(Base):
+    __tablename__ = "staff_contacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(25))  # department, caretaker, warden, medical, backup
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    shift: Mapped[str] = mapped_column(String(10), default="all")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class PlaceCoverage(Base):
+    __tablename__ = "place_coverage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    place_id: Mapped[int] = mapped_column(ForeignKey("campus_places.id"), index=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff_contacts.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer, default=1)
+    __table_args__ = (UniqueConstraint("place_id", "staff_id"),)
+
+
+class AlertAssignment(Base):
+    __tablename__ = "alert_assignments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[int] = mapped_column(ForeignKey("medical_alerts.id"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff_contacts.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="sent")
+    findings: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AlertEvent(Base):
+    __tablename__ = "alert_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[int] = mapped_column(ForeignKey("medical_alerts.id"), index=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(50))
+    note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AlertMessage(Base):
+    __tablename__ = "alert_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[int] = mapped_column(ForeignKey("medical_alerts.id"), index=True)
+    sender_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sender_kind: Mapped[str] = mapped_column(String(20))
+    body: Mapped[str] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class NotificationJob(Base):
+    __tablename__ = "notification_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[int] = mapped_column(ForeignKey("medical_alerts.id"), index=True)
+    staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff_contacts.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

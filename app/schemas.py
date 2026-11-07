@@ -143,7 +143,10 @@ class IncidentCreate(BaseModel):
     @field_validator('category')
     @classmethod
     def validate_category_no_xss(cls, v: str) -> str:
-        return validate_no_xss(v, 'category')
+        value = validate_no_xss(v, 'category')
+        if value.strip().lower() != 'medical':
+            raise ValueError('Only medical incidents are supported')
+        return 'Medical'
 
     @field_validator('location')
     @classmethod

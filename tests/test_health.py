@@ -8,17 +8,15 @@ def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"
+    assert data["status"] == "healthy"
     assert "version" in data
 
 
 def test_home():
     response = client.get("/")
     assert response.status_code == 200
-    data = response.json()
-    assert data["message"] == "Campus Emergency Response System"
-    assert data["docs"] == "/docs"
-    assert data["health"] == "/health"
+    assert "text/html" in response.headers["content-type"]
+    assert "Get medical help" in response.text
 
 
 def test_metrics():

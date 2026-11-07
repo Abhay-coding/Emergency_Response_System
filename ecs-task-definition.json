@@ -23,21 +23,18 @@
           "value": "production"
         },
         {
-          "name": "DATABASE_URL",
-          "value": "postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}"
-        },
-        {
           "name": "REDIS_URL",
           "value": "redis://${REDIS_HOST}:6379/0"
         },
         {
-          "name": "JWT_SECRET",
-          "value": "${JWT_SECRET}"
-        },
-        {
           "name": "CORS_ORIGINS",
-          "value": "https://your-frontend-domain.com"
+          "value": "[\"https://your-frontend-domain.com\"]"
         },
+        {"name": "NOTIFICATION_MODE", "value": "sns"},
+        {"name": "AWS_REGION", "value": "${AWS_REGION}"},
+        {"name": "AWS_SQS_QUEUE_URL", "value": "${SQS_QUEUE_URL}"},
+        {"name": "CAMPUS_EMERGENCY_PHONE", "value": "${CAMPUS_EMERGENCY_PHONE}"},
+        {"name": "BACKUP_PHONE", "value": "${BACKUP_PHONE}"},
         {
           "name": "LOG_LEVEL",
           "value": "INFO"

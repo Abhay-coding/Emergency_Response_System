@@ -5,7 +5,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # Application
-    app_name: str = "Campus Emergency Response System"
+    app_name: str = "Campus Medical Assistance"
     environment: str = "development"  # development, staging, production
     debug: bool = False
 
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # File uploads
     upload_dir: str = "uploads"
     max_upload_size_mb: int = 5
+    alert_ack_seconds: int = 60
+    campus_emergency_phone: Optional[str] = None
+    backup_phone: Optional[str] = None
+    notification_mode: str = "simulation"  # simulation, sns
+    aws_region: Optional[str] = None
+    aws_sqs_queue_url: Optional[str] = None
+    campus_timezone: str = "Asia/Kolkata"
 
     # JWT
     # JWT secret MUST be set via environment variable - no default for security
@@ -45,7 +52,7 @@ class Settings(BaseSettings):
     allowed_hosts: list[str] = ["*"]
 
     # Logging
-    log_level: str = "INFO"
+    log_level: str = "DEBUG"
     log_format: str = "json"  # json or text
 
     # Monitoring

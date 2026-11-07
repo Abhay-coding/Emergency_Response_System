@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10233b">
+  <meta name="description" content="Request medical assistance on campus with one tap.">
+  <title>Campus Medical Assistance</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b92731'/%3E%3Cpath d='M16 6v20M6 16h20' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/medical.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="Campus Medical Assistance home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" width="28" height="28"><path d="M16 5v22M5 16h22" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg></span>
+        <span>Campus<span class="brand-accent">Medical</span><small>ASSISTANCE</small></span>
+      </a>
+      <nav class="header-actions" aria-label="Account">
+        <span id="account-label" class="account-label">Guest access</span>
+        <button id="login-open" class="button button-outline button-small" type="button">Sign in</button>
+        <button id="logout" class="button button-outline button-small hidden" type="button">Sign out</button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <div class="notice-bar" role="note">
+      <span class="notice-icon" aria-hidden="true">!</span>
+      <p>This is a college project prototype. If someone needs immediate help, call campus medical services or local emergency services directly.</p>
+    </div>
+
+    <section id="student-view" class="page-shell">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> FOR MEDICAL EMERGENCIES ON CAMPUS</p>
+          <h1>Help starts<br><em>with one tap.</em></h1>
+          <p class="hero-lead">You do not need to fill out a form first. Send an alert now, then add your location or details if you can.</p>
+          <div class="hero-benefits" aria-label="What happens next">
+            <span><span class="benefit-dot"></span> Alert reaches the admin queue</span>
+            <span><span class="benefit-dot"></span> A person coordinates the response</span>
+          </div>
+        </div>
+        <div class="emergency-card" aria-labelledby="emergency-heading">
+          <div class="card-topline"><span class="pulse-dot" aria-hidden="true"></span><span>MEDICAL HELP REQUEST</span></div>
+          <h2 id="emergency-heading">Need help right now?</h2>
+          <p>Press the button below. Your alert is sent immediately, even if you are not signed in.</p>
+          <button id="help-button" class="sos-button" type="button">
+            <svg aria-hidden="true" width="27" height="27" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+            <span>Get medical help</span>
+            <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24"><path d="m5 12 14 0m-6-6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button id="bystander-button" class="bystander-button" type="button">Report someone else's emergency <span aria-hidden="true">→</span></button>
+          <p class="card-footnote">No symptoms, photo, or location required to send the first alert.</p>
+          <a id="emergency-call" class="call-link hidden" href="#">Call campus emergency services</a>
+        </div>
+      </div>
+
+      <section id="request-panel" class="request-panel hidden" aria-labelledby="request-heading">
+        <div class="request-head"><div><p class="eyebrow">YOUR REQUEST</p><h2 id="request-heading">Medical alert received</h2></div><span id="request-number" class="request-number"></span></div>
+        <div id="request-state" class="status-banner" role="status" aria-live="polite">Sending your alert…</div>
+        <ol class="progress-list" aria-label="Response progress"><li id="progress-new" class="active">Received</li><li id="progress-acknowledged">Admin reviewing</li><li id="progress-staff">Staff contacted</li><li id="progress-medical">Medical team notified</li></ol>
+        <div class="request-columns">
+          <form id="details-form" class="details-card">
+            <h3>Help responders find you</h3><p class="muted">Optional. Your request is already in the queue.</p>
+            <label for="place">Campus location</label><select id="place" name="place"><option value="">Choose a building or hostel</option></select>
+            <label for="location-text">Room, floor, or landmark</label><input id="location-text" name="location-text" maxlength="200" placeholder="For example, Library ground floor">
+            <button id="share-location" class="button button-soft" type="button">Use my device location</button>
+            <label for="callback-phone">Callback number</label><input id="callback-phone" name="callback-phone" type="tel" maxlength="30" autocomplete="tel" placeholder="Optional">
+            <label for="details">Anything else the admin should know?</label><textarea id="details" name="details" maxlength="1000" rows="3" placeholder="Optional details"></textarea>
+            <button class="button button-navy" type="submit">Save details</button>
+          </form>
+          <div class="details-card message-card"><h3>Message the admin</h3><p class="muted">If you can, send a short update. The admin may ask for your location.</p><div id="student-messages" class="message-list" aria-live="polite"></div><form id="student-message-form" class="message-compose"><label class="sr-only" for="student-message">Message</label><input id="student-message" maxlength="1000" placeholder="Type a short message"><button class="button button-navy" type="submit">Send</button></form></div>
+        </div>
+      </section>
+
+      <section class="how-it-works" aria-labelledby="steps-heading"><div class="section-heading"><p class="eyebrow">A SIMPLE RESPONSE PATH</p><h2 id="steps-heading">What happens after you tap</h2></div><div class="step-grid"><article><span class="step-number">01</span><h3>Alert sent</h3><p>The request reaches the admin queue immediately, with or without a location.</p></article><article><span class="step-number">02</span><h3>Human review</h3><p>An admin contacts you or sends nearby staff to confirm what is needed.</p></article><article><span class="step-number">03</span><h3>Help coordinated</h3><p>The admin can alert department or hostel staff and arrange medical assistance.</p></article></div></section>
+    </section>
+
+    <section id="admin-view" class="page-shell workspace hidden" aria-labelledby="admin-title">
+      <div class="workspace-title"><div><p class="eyebrow">OPERATIONS CONSOLE</p><h1 id="admin-title">Medical response queue</h1><p>Review requests, reach nearby staff, and record each handoff.</p></div><span id="operations-pill" class="ops-pill">Checking coverage</span></div>
+      <div id="operations-warning" class="ops-warning hidden" role="alert"></div>
+      <div class="workspace-grid">
+        <section class="panel queue-panel" aria-labelledby="queue-title"><div class="panel-title"><h2 id="queue-title">Incoming alerts</h2><span id="queue-count" class="count-badge">0</span></div><div id="admin-queue" class="queue-list" aria-live="polite"></div></section>
+        <section class="panel detail-panel" aria-labelledby="detail-title"><div class="panel-title"><h2 id="detail-title">Alert details</h2><span id="detail-id" class="muted"></span></div><div id="admin-detail" class="empty-detail">Select an alert to review it.</div></section>
+      </div>
+      <section class="panel directory-panel" aria-labelledby="directory-title"><div class="panel-title"><div><h2 id="directory-title">Campus staff directory</h2><p class="muted">Add contacts and link them to locations for faster suggestions.</p></div></div><div class="directory-grid"><form id="contact-form" class="compact-form"><h3>Add staff contact</h3><label for="contact-name">Name</label><input id="contact-name" required minlength="2"><label for="contact-kind">Role</label><select id="contact-kind"><option value="department">Department staff</option><option value="caretaker">Hostel caretaker</option><option value="warden">Warden</option><option value="medical">Medical team</option><option value="backup">Backup contact</option></select><label for="contact-phone">Phone</label><input id="contact-phone" type="tel"><label for="contact-shift">Shift</label><select id="contact-shift"><option value="all">All hours</option><option value="day">Day</option><option value="night">Night</option></select><label for="contact-email">Staff login email (optional)</label><input id="contact-email" type="email"><label for="contact-password">Initial password (with email)</label><input id="contact-password" type="password" minlength="8"><button class="button button-navy" type="submit">Add contact</button></form><div><div id="contact-list" class="contact-list"></div><form id="coverage-form" class="compact-form coverage-form"><h3>Suggest staff for a place</h3><label for="coverage-place">Campus place</label><select id="coverage-place"></select><label for="coverage-staff">Staff contact</label><select id="coverage-staff"></select><label for="coverage-rank">Suggestion order</label><input id="coverage-rank" type="number" min="1" max="100" value="1"><button class="button button-navy" type="submit">Save coverage</button></form></div></div></section>
+    </section>
+
+    <section id="staff-view" class="page-shell workspace hidden" aria-labelledby="staff-title"><div class="workspace-title"><div><p class="eyebrow">STAFF RESPONSE</p><h1 id="staff-title">Alerts assigned to you</h1><p>Acknowledge an alert and send your findings to the admin.</p></div></div><div id="staff-inbox" class="staff-grid"></div></section>
+  </main>
+
+  <footer class="site-footer"><div class="footer-inner"><span>Campus Medical Assistance</span><span>For medical emergencies on this college campus only</span></div></footer>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title"><form id="auth-form" method="dialog"><div class="dialog-head"><div><p class="eyebrow">ACCOUNT ACCESS</p><h2 id="auth-title">Sign in</h2></div><button id="auth-close" class="icon-button" type="button" aria-label="Close">×</button></div><p class="muted">The emergency button works without signing in. Staff and admins sign in here.</p><div id="register-name-wrap" class="hidden"><label for="auth-name">Full name</label><input id="auth-name" autocomplete="name"></div><label for="auth-email">Email</label><input id="auth-email" type="email" autocomplete="username" required><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="current-password" required><p id="auth-error" class="form-error hidden" role="alert"></p><button id="auth-submit" class="button button-navy button-full" type="submit">Sign in</button><button id="auth-switch" class="text-button" type="button">Create a student account</button></form></dialog>
+  <script src="/static/medical.js" defer></script>
+</body>
+</html>

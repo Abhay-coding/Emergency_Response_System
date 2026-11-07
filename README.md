@@ -1,4 +1,4 @@
-﻿# Campus Emergency Response System API
+﻿# Campus Medical Assistance
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
@@ -8,7 +8,27 @@
 [![AWS ECS](https://img.shields.io/badge/AWS_ECS-Fargate-orange.svg)](https://aws.amazon.com/fargate/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A **production-ready** FastAPI application for campus incident reporting and response, designed for **AWS ECS Fargate + RDS** deployment with enterprise-grade security, observability, and scalability.
+A FastAPI application for requesting and tracking campus medical assistance, designed for **AWS ECS Fargate + RDS** deployment. The incident model remains in the API; the web interface creates and lists medical requests.
+
+## Medical emergency flow (new)
+
+The home screen now opens a **medical-only** flow. A student can send an alert with one tap, even without signing in. Location, callback number, and details can be added afterward. A bystander can report another student's emergency. Admins claim requests, contact the reporter, notify department or hostel staff, and record medical team dispatch. Staff with accounts can acknowledge and send findings. Caretakers are alerted only after admin review.
+
+The campus place list is seeded from the college locations supplied for this project. Admins configure coverage and day/night staff contacts; the app suggests configured nearby staff and lets an admin override the suggestion. A lack of reply is never treated as proof of a prank.
+
+### Run a local demo
+
+1. Start the app with `Start-Local.cmd` or `python -m uvicorn app.main:app --reload`.
+2. In a second terminal, run `python -m app.cli create-admin admin@your-college.edu` and enter an admin password.
+3. The one-click launcher starts the local notification worker as well. If you start Uvicorn manually, run `python -m app.worker` in another terminal. With `NOTIFICATION_MODE=simulation`, jobs are marked **simulated**, never delivered.
+4. Sign in as admin, add staff contacts and optional staff logins, and configure coverage for each place in the admin portal.
+5. Set `CAMPUS_EMERGENCY_PHONE` and `BACKUP_PHONE` only to verified college numbers. The admin portal shows missing setup and failed jobs.
+
+The browser app is a project prototype until the college supplies a staffed duty roster, verifies all contact numbers, configures an approved outbound provider, and tests delivery and escalation. It does not claim that a simulated alert reached anyone.
+
+### Cloud computing architecture
+
+See [docs/CLOUD-ARCHITECTURE.md](docs/CLOUD-ARCHITECTURE.md) for the ECS, RDS, SQS, SNS, worker, migration, and monitoring path. The API and worker use the same container image with different commands. Run `alembic upgrade head` as a one-off deployment task before starting production services. Local SQLite startup creates tables for development; production startup requires the migrated schema.
 
 ---
 
@@ -17,7 +37,7 @@ A **production-ready** FastAPI application for campus incident reporting and res
 ### Core Functionality
 - **Authentication & Authorization**: JWT-based access/refresh tokens with rotation, theft detection, and family-based revocation
 - **Role-Based Access Control**: Three roles — Reporter, Responder, Admin — with granular permissions
-- **Incident Management**: Full CRUD operations with image uploads, assignment, and status tracking
+- **Medical Requests**: Report a medical situation with an optional image, then track assignment and status
 - **Analytics Dashboard**: Real-time incident summaries with SQL-optimized aggregations
 
 ### Security First
@@ -43,6 +63,14 @@ A **production-ready** FastAPI application for campus incident reporting and res
 ---
 
 ## 🚀 Quick Start
+
+Open the web app at `http://127.0.0.1:8000/` after starting the server. Opening `frontend/index.html` directly shows the interface, but requests and sign-in need the running API.
+
+### Windows: start with one click
+
+Double-click `Start-Local.cmd`. It creates the local Python environment when needed, installs the Python packages on first run, starts the API and frontend together, then opens the app at `http://127.0.0.1:8000/`. If port 8000 is already in use, it selects the next available port automatically. Keep the PowerShell window open while you use the app; press `Ctrl+C` there to stop it.
+
+`Start-Local.ps1` contains the launcher itself. You can also right-click it and choose **Run with PowerShell**.
 
 ### Prerequisites
 - **Docker** & **Docker Compose** (recommended)
