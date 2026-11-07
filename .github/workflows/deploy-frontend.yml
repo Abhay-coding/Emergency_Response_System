@@ -116,6 +116,11 @@ jobs:
           # the copied files at the repository path, so make the artifact
           # relative to its own directory.
           sed -i 's|/static/|./|g' build/medical.html
+          # Ensure a Pages deployment never reuses an earlier config or app
+          # script from a browser cache.
+          sed -i "s|./medical.css|./medical.css?v=${GITHUB_SHA}|" build/medical.html
+          sed -i "s|./config.js|./config.js?v=${GITHUB_SHA}|" build/medical.html
+          sed -i "s|./medical.js|./medical.js?v=${GITHUB_SHA}|" build/medical.html
           # Create a simple index.html redirect for convenience
           cat > build/index.html << 'EOF'
           <!DOCTYPE html>
