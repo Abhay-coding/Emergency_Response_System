@@ -156,9 +156,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    if settings.data_api_enabled:
-        logger.info("data_api_mode_enabled")
+    if not settings.dynamo_demo_enabled:
+        Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    if settings.data_api_enabled or settings.dynamo_demo_enabled:
+        logger.info("managed_demo_store_enabled")
     elif settings.environment == "production":
         from sqlalchemy import inspect
         if not inspect(engine).has_table("medical_alerts"):
@@ -167,7 +168,7 @@ async def lifespan(app: FastAPI):
         init_db()
 
     # Seed campus places once at startup
-    if not settings.data_api_enabled:
+    if not (settings.data_api_enabled or settings.dynamo_demo_enabled):
         from app.database import SessionLocal
         from app.routers.medical_alerts import seed_places
         with SessionLocal() as db:
@@ -240,11 +241,11 @@ app.add_middleware(
 
 # Allowed hosts middleware for production
 if settings.environment == "production" and settings.allowed_hosts:
-    from starlette.middleware.hosts import HostMiddleware
-    app.add_middleware(HostMiddleware, allowed_hosts=settings.allowed_hosts)
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
 # Include routers
-if settings.data_api_enabled:
+if settings.data_api_enabled or settings.dynamo_demo_enabled:
     from app.routers import data_api_demo
     app.include_router(data_api_demo.router, prefix="/api/v1")
 else:

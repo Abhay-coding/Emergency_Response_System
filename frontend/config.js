@@ -8,6 +8,7 @@
  * - Development: 'http://localhost:8000' or ''
  * - Production: 'https://your-api-domain.com' or use relative if API is on same domain
  * - Custom: Set to your API URL
+ * - GitHub Pages: published unchanged by the deployment workflow.
  */
 
 window.CER_CONFIG = {
@@ -17,7 +18,7 @@ window.CER_CONFIG = {
   // - Production API: 'https://api.yourdomain.com'
   // - Same domain (if API is served from same origin): ''
   // - GitHub Pages with separate API: 'https://your-backend.onrender.com'
-  API_BASE_URL: '',
+  API_BASE_URL: 'https://myypbjkalj.execute-api.ap-south-1.amazonaws.com',
 
   // API version path
   API_VERSION: '/api/v1',
@@ -34,7 +35,7 @@ window.CER_CONFIG = {
   BUILD: {
     VERSION: '1.0.0',
     BUILD_TIME: new Date().toISOString(),
-    ENVIRONMENT: 'development', // 'development', 'staging', 'production'
+    ENVIRONMENT: 'production', // 'development', 'staging', 'production'
   },
 
   // Validate and get the full API URL
