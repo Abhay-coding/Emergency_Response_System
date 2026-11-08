@@ -66,10 +66,17 @@ class DynamoDemoRepository:
         self._event(alert_id,"created"); return alert_id
     def conditional_action(self, alert_id:int, version:int, actor_id:int, *, status=None, verification=None, action:str, note=None):
         values={":old":version,":one":1,":now":self._now()}; sets=["version = version + :one","updated_at = :now"]
-        if status is not None: sets += ["#status = :status"]; values[":status"]=status
+        names = None
+        if status is not None:
+            sets += ["#status = :status"]
+            values[":status"]=status
+            names = {"#status":"status"}
         if verification is not None: sets += ["verification = :verification"]; values[":verification"]=verification
         try:
-            self.table.update_item(Key={"pk":self._pk(alert_id),"sk":"META"},UpdateExpression="SET "+", ".join(sets),ConditionExpression="version = :old",ExpressionAttributeNames={"#status":"status"},ExpressionAttributeValues=values)
+            request = {"Key":{"pk":self._pk(alert_id),"sk":"META"}, "UpdateExpression":"SET "+", ".join(sets), "ConditionExpression":"version = :old", "ExpressionAttributeValues":values}
+            if names:
+                request["ExpressionAttributeNames"] = names
+            self.table.update_item(**request)
         except ClientError as exc:
             if exc.response["Error"]["Code"]=="ConditionalCheckFailedException": return None
             raise

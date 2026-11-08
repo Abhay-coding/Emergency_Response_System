@@ -1,4 +1,5 @@
 from app.services.data_api import AuroraAlertRepository, AuroraUserRepository, DynamoIdempotencyLedger
+from app.dynamo_demo_repository import DynamoDemoRepository
 
 
 class FakeTable:
@@ -48,3 +49,31 @@ def test_alert_and_audit_share_one_data_api_transaction():
 def test_user_lookup_maps_data_api_record():
     user = AuroraUserRepository(FakeDataApi(), "cluster", "secret", "campus").find_by_email("ADMIN@example.edu")
     assert user == {"id": 7, "name": "Demo Admin", "email": "admin@example.edu", "password_hash": "hash", "role": "admin", "must_reset_password": False}
+
+
+class FakeDynamoAlertTable:
+    def __init__(self):
+        self.item = {"pk": "ALERT#1", "sk": "META", "id": 1, "version": 1}
+        self.update_kwargs = None
+
+    def update_item(self, **kwargs):
+        self.update_kwargs = kwargs
+        self.item["version"] += 1
+
+    def get_item(self, **_):
+        return {"Item": self.item}
+
+    def put_item(self, **_):
+        return {}
+
+
+def test_dynamo_verify_does_not_send_unused_status_placeholder():
+    repo = DynamoDemoRepository.__new__(DynamoDemoRepository)
+    repo.table = FakeDynamoAlertTable()
+
+    result = repo.conditional_action(
+        1, 1, 1, verification="confirmed_need", action="need_confirmed"
+    )
+
+    assert result["version"] == 2
+    assert "ExpressionAttributeNames" not in repo.table.update_kwargs
