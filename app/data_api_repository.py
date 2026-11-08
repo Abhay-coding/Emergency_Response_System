@@ -139,6 +139,9 @@ class DynamoLedger:
 
 
 def get_repo() -> DataAPIRepository:
+    if os.getenv("DYNAMO_DEMO_ENABLED", "").lower() == "true":
+        from app.dynamo_demo_repository import DynamoDemoRepository
+        return DynamoDemoRepository()  # type: ignore[return-value]
     try:
         return DataAPIRepository(os.getenv("AURORA_CLUSTER_ARN", ""), os.getenv("AURORA_SECRET_ARN", ""), os.getenv("AURORA_DATABASE", ""))
     except ValueError as exc:

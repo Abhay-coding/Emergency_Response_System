@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     aws_region: Optional[str] = None
     aws_sqs_queue_url: Optional[str] = None
     data_api_enabled: bool = False
+    dynamo_demo_enabled: bool = False
     campus_timezone: str = DEFAULT_CAMPUS_TIMEZONE
 
     # JWT
