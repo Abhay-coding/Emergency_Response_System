@@ -14,6 +14,9 @@ jobs:
     name: Test demo API and frontend
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      JWT_SECRET: ci-only-secret-with-more-than-thirty-two-unique-characters-12345
+      GUEST_TOKEN_SECRET: ci-guest-secret-with-more-than-thirty-two-unique-characters-67890
     steps:
       - uses: actions/checkout@v4
 
