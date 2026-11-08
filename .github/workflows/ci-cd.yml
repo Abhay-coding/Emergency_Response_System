@@ -31,7 +31,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run focused API tests
-        run: pytest tests/test_data_api.py tests/test_data_api_router.py tests/test_cors.py -q
+        run: python -m pytest tests/test_data_api.py tests/test_data_api_router.py tests/test_cors.py -q
 
       - name: Check Python modules compile
         run: python -m py_compile app/dynamo_demo_repository.py app/routers/data_api_demo.py
