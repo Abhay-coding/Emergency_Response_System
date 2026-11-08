@@ -83,7 +83,13 @@ DEFAULT_PAGE_OFFSET = 0
 # Default is empty list to prevent insecure localhost defaults in production
 DEFAULT_CORS_ORIGINS = []
 DEFAULT_ALLOWED_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
-DEFAULT_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Request-ID"]
+DEFAULT_ALLOWED_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "Idempotency-Key",
+    "X-Alert-Token",
+    "X-Request-ID",
+]
 DEFAULT_EXPOSE_HEADERS = ["X-Request-ID"]
 
 # Request Size Limits
