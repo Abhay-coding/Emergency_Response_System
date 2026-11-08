@@ -10,6 +10,7 @@ function placeName(id) { return state.places.find(p => p.id === id)?.name || 'Lo
 function phoneHref(value) { return 'tel:' + String(value || '').replace(/[^+\d]/g, ''); }
 function toast(message, isError=false) { const el=$('toast'); el.textContent=message; el.classList.toggle('error',isError); el.classList.remove('hidden'); clearTimeout(toast.timer); toast.timer=setTimeout(()=>el.classList.add('hidden'),5500); }
 function setBusy(button, busy, label) { button.disabled=busy; if (busy) { button.dataset.label=button.textContent; button.textContent=label; } else if (button.dataset.label) { button.textContent=button.dataset.label; delete button.dataset.label; } }
+function userMessage(error) { const text=String(error?.message||''); if(text.includes('fetch')) return 'The response service could not be reached. Call campus emergency services directly.'; if(text.includes('already exists')) return 'An account already exists for this email. Sign in instead.'; if(text.includes('Alert changed')) return 'This alert was updated by another admin. The queue has been refreshed.'; return 'We could not save that update. Please try again.'; }
 
 async function api(path, options={}) {
   if (window.CER_CONFIG?.isApiConfigured && !window.CER_CONFIG.isApiConfigured()) {
@@ -29,25 +30,24 @@ async function api(path, options={}) {
   return data;
 }
 function activeHeaders() { return state.active?.guest_token ? {'X-Alert-Token':state.active.guest_token} : {}; }
-function saveActive(data, key) { state.active={id:data.id, guest_token:data.guest_token || null, key}; sessionStorage.setItem('medical_active',JSON.stringify(state.active)); }
+function saveActive(data, key) { state.active={id:data.id, guest_token:data.guest_token || null, key, status:data.status || 'new'}; sessionStorage.setItem('medical_active',JSON.stringify(state.active)); }
 
 function showView() {
   const role=state.user?.role;
-  $('student-view').classList.toggle('hidden',role==='admin'||role==='responder');
+  $('student-view').classList.toggle('hidden',role==='admin');
   $('admin-view').classList.toggle('hidden',role!=='admin');
-  $('staff-view').classList.toggle('hidden',role!=='responder');
   $('account-label').textContent=state.user ? `${state.user.name} · ${friendly(role)}` : 'Guest access';
   $('login-open').classList.toggle('hidden',!!state.user);
   $('logout').classList.toggle('hidden',!state.user);
   if (role==='admin') refreshAdmin();
-  else if (role==='responder') refreshStaff();
   else if (state.active) refreshStudent();
 }
 
 async function startAlert(source) {
-  if (state.active && !['resolved','closed_false_report'].includes(state.activeStatus || 'new')) {
+  if (state.active && !['resolved','closed_false_report'].includes(state.active.status || 'new')) {
+    try { await api(`/medical-alerts/${state.active.id}/escalate`,{method:'POST',headers:activeHeaders()}); toast('Urgent follow-up was recorded for the admin.'); }
+    catch(e) { toast(userMessage(e),true); }
     $('request-panel').scrollIntoView({behavior:'smooth',block:'start'});
-    toast('Your current alert is already in the queue.');
     return;
   }
   const button=source==='self' ? $('help-button') : $('bystander-button');
@@ -63,11 +63,12 @@ async function startAlert(source) {
     toast('Your medical alert was received.');
     requestDeviceLocation();
   } catch(e) {
-    toast(`Alert was not sent: ${e.message}. Call campus emergency services directly.`,true);
+    toast(userMessage(e),true);
   } finally { setBusy(button,false); }
 }
 
 function renderStudentStatus(alert) {
+  if (state.active) { state.active.status=alert.status; sessionStorage.setItem('medical_active',JSON.stringify(state.active)); }
   state.activeStatus=alert.status;
   $('request-panel').classList.remove('hidden');
   $('request-number').textContent=`#${alert.id}`;
@@ -106,7 +107,7 @@ async function saveDetails(e) {
     const value=$(id).value.trim(); if (value) body[field]=value;
   }
   try { await api(`/medical-alerts/${state.active.id}/location`,{method:'PATCH',headers:activeHeaders(),json:body}); toast('Details shared with the admin.'); }
-  catch(e) { toast(e.message,true); }
+  catch(e) { toast(userMessage(e),true); }
 }
 
 function renderMessages(id,messages) {
@@ -128,7 +129,7 @@ async function refreshAdmin() {
     if(state.selected) {
       const current=state.alerts.find(a=>a.id===state.selected);
       if(current && JSON.stringify(current)!==state.selectedSnapshot) await selectAlert(state.selected);
-      else await Promise.all([loadEvents(state.selected),loadAdminMessages(state.selected)]);
+      else await loadEvents(state.selected);
     }
   } catch(e) { toast(`Could not load admin queue: ${e.message}`,true); }
 }
@@ -155,7 +156,12 @@ async function selectAlert(id) {
   $('admin-detail').querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>adminAction(button.dataset.action)));
   $('staff-choice').addEventListener('change',()=>{const c=state.contacts.find(x=>x.id===Number($('staff-choice').value));const link=$('staff-call');link.classList.toggle('hidden',!c?.phone);if(c?.phone)link.href=phoneHref(c.phone);});
   $('staff-send').addEventListener('click',sendStaffAlert);
-  $('admin-message-form').addEventListener('submit',sendAdminMessage);
+  const responseSection=$('admin-message-form')?.closest('.detail-section');
+  if (responseSection) {
+    responseSection.innerHTML='<h4>Record staff response</h4><p class="muted">Staff do not need a portal. Record their phone or in-person response here so the alert timeline remains complete.</p><div class="action-row"><button id="record-staff-ack" class="button button-soft" type="button">Record acknowledgement</button></div><label for="staff-findings"><strong>Staff findings</strong></label><textarea id="staff-findings" rows="2" placeholder="What did the staff member confirm at the scene?"></textarea><button id="record-staff-findings" class="button button-navy" type="button">Record findings</button>';
+    $('record-staff-ack').addEventListener('click',()=>recordStaffResponse('staff-acknowledged'));
+    $('record-staff-findings').addEventListener('click',()=>recordStaffResponse('staff-findings'));
+  }
   await Promise.all([loadEvents(id),window.CER_CONFIG?.FEATURES?.ENABLE_MESSAGES?loadAdminMessages(id):Promise.resolve(),loadSuggestions(alert.place_id,id)]);
 }
 async function loadEvents(id) { try { const events=await api(`/medical-alerts/${id}/events`); if(state.selected!==id)return; $('event-list').innerHTML=events.length?events.map(e=>`<li><strong>${friendly(e.action)}</strong>${e.note?` · ${escapeHtml(e.note)}`:''}<small>${new Date(e.created_at).toLocaleString()}</small></li>`).join(''):'<li>No activity yet.</li>'; } catch(e){toast(e.message,true);} }
@@ -165,12 +171,13 @@ async function loadSuggestions(placeId,id) { if(!placeId)return; try {const rows
 async function adminAction(action) {
   if(!state.selected)return; const note=$('action-note')?.value.trim()||'';
   const alert=state.alerts.find(a=>a.id===state.selected); const version=alert?.version;
-  let body={note,version}; if(action==='close-false') body={reason:note,version};
+  const body={note,version};
   if(action!=='claim' && note.length<(action==='close-false'?10:2)) {toast('Write a clear action note first.',true);$('action-note').focus();return;}
   try {await api(`/medical-alerts/${state.selected}/${action}`,{method:'POST',json:action==='claim'?{version}:body});toast('Action recorded.');await refreshAdmin();}
-  catch(e){toast(e.message,true);}
+  catch(e){toast(userMessage(e),true);}
 }
-async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a staff contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version}});toast('Demo notification recorded.');refreshAdmin();}catch(e){toast(e.message,true);} }
+async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a staff contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version}});toast('Simulated notification recorded. Contact the staff member directly.');refreshAdmin();}catch(e){toast(userMessage(e),true);} }
+async function recordStaffResponse(kind) { const version=state.alerts.find(a=>a.id===state.selected)?.version; const note=kind==='staff-findings'?$('staff-findings').value.trim():'Acknowledgement received by phone or in person.'; if(kind==='staff-findings'&&note.length<2){toast('Enter staff findings first.',true);$('staff-findings').focus();return;} try { await api(`/medical-alerts/${state.selected}/${kind}`,{method:'POST',json:{version,note}}); toast(kind==='staff-findings'?'Staff findings recorded.':'Staff acknowledgement recorded.'); await loadEvents(state.selected); } catch(e) { toast(userMessage(e),true); } }
 async function sendAdminMessage(e) {e.preventDefault();const body=$('admin-message').value.trim();if(!body)return;try{await api(`/medical-alerts/${state.selected}/messages`,{method:'POST',json:{body}});$('admin-message').value='';loadAdminMessages(state.selected);}catch(err){toast(err.message,true);} }
 
 function renderContacts() {
@@ -181,7 +188,7 @@ function renderContacts() {
   $('contact-list').querySelectorAll('.contact-edit').forEach(form=>form.addEventListener('submit',updateContact));
   $('coverage-staff').innerHTML='<option value="">Choose contact</option>'+state.contacts.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
 }
-async function createContact(e){e.preventDefault();const body={name:$('contact-name').value.trim(),kind:$('contact-kind').value,phone:$('contact-phone').value.trim()||null,shift:$('contact-shift').value};if($('contact-email').value.trim()){body.email=$('contact-email').value.trim();body.password=$('contact-password').value;}try{await api('/campus/contacts',{method:'POST',json:body});$('contact-form').reset();toast('Contact added.');refreshAdmin();}catch(err){toast(err.message,true);} }
+async function createContact(e){e.preventDefault();const body={name:$('contact-name').value.trim(),kind:$('contact-kind').value,phone:$('contact-phone').value.trim()||null,shift:$('contact-shift').value};try{await api('/campus/contacts',{method:'POST',json:body});$('contact-form').reset();toast('Contact added.');refreshAdmin();}catch(err){toast(userMessage(err),true);} }
 async function updateContact(e){e.preventDefault();const form=e.currentTarget;const body={phone:form.elements.phone.value.trim()||null,shift:form.elements.shift.value,active:form.elements.active.checked};try{await api(`/campus/contacts/${form.dataset.contactId}`,{method:'PATCH',json:body});toast('Contact updated.');refreshAdmin();}catch(err){toast(err.message,true);} }
 async function saveCoverage(e){e.preventDefault();const body={place_id:Number($('coverage-place').value),staff_id:Number($('coverage-staff').value),rank:Number($('coverage-rank').value)};if(!body.place_id||!body.staff_id){toast('Choose a place and contact.',true);return;}try{await api('/campus/coverage',{method:'POST',json:body});toast('Coverage saved.');if(state.selected)selectAlert(state.selected);}catch(err){toast(err.message,true);} }
 
@@ -197,7 +204,7 @@ async function init(){
   $('bystander-button').addEventListener('click',()=>startAlert('bystander'));
   $('details-form').addEventListener('submit',saveDetails);
   $('share-location').addEventListener('click',requestDeviceLocation);
-  $('student-message-form').addEventListener('submit',sendStudentMessage);
+  if ($('student-message-form')) $('student-message-form').addEventListener('submit',sendStudentMessage);
   $('login-open').addEventListener('click',openAuth);
   $('auth-close').addEventListener('click',()=>$('auth-dialog').close());
   $('auth-switch').addEventListener('click',()=>setAuthMode(state.authMode==='login'?'register':'login'));
@@ -209,7 +216,7 @@ async function init(){
     toast('Live response service is not connected. Call campus emergency services directly.', true);
   } else { try{const [places,config]=await Promise.all([api('/medical-alerts/places'),api('/medical-alerts/config')]);state.places=places;const options=places.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');$('place').insertAdjacentHTML('beforeend',options);$('coverage-place').innerHTML='<option value="">Choose place</option>'+places.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');if(config.campus_emergency_phone){const link=$('emergency-call');link.href=phoneHref(config.campus_emergency_phone);link.textContent=`Call campus emergency services: ${config.campus_emergency_phone}`;link.classList.remove('hidden');}}catch(e){toast(`Could not load campus places: ${e.message}`,true);}}
   await restoreSession();showView();
-  state.timer=setInterval(()=>{if(state.user?.role==='admin')refreshAdmin();else if(state.user?.role==='responder')refreshStaff();else if(state.active)refreshStudent();},5000);
+  state.timer=setInterval(()=>{if(state.user?.role==='admin')refreshAdmin();else if(state.active)refreshStudent();},15000);
 }
 document.addEventListener('DOMContentLoaded',init);
 

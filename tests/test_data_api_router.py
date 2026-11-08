@@ -21,6 +21,18 @@ class FakeRepo:
     def alert(self, alert_id): return self.alerts.get(alert_id)
     def events(self, _): return []
     def contacts(self): return []
+    def register_student(self, name, email, password):
+        if self.find_user_by_email(email): return None
+        self.user = {"id": 2, "name": name, "email": email, "password_hash": hash_password(password), "role": "reporter", "must_reset_password": False}
+        return self.user
+    def place_by_name(self, name): return {"id": 1, "name": "Library"} if name == "Library" else None
+    def update_alert_details(self, alert_id, **details):
+        self.alerts[alert_id].update(details); self.alerts[alert_id]["version"] += 1
+        return self.alerts[alert_id]
+    def escalate_alert(self, alert_id):
+        alert=self.alerts.get(alert_id)
+        if alert: alert["escalated"] = True
+        return alert
     def conditional_action(self, alert_id, version, _, **changes):
         alert=self.alerts.get(alert_id)
         if not alert or alert["version"] != version: return None
@@ -32,10 +44,30 @@ def test_demo_alert_to_admin_resolution_flow():
     repo, claims = FakeRepo(), FakeLedger()
     token = data_api_demo.login("admin@example.edu", "Password1!", repo)["access_token"]
     admin = repo.find_user(int(decode_access_token(token)["sub"]))
-    alert = data_api_demo.create_alert(data_api_demo.AlertIn(source="self"), "550e8400-e29b-41d4-a716-446655440000", repo, claims)
+    alert = data_api_demo.create_alert(data_api_demo.AlertIn(source="self"), "550e8400-e29b-41d4-a716-446655440000", None, repo, claims)
     alert_id = alert["id"]
-    assert data_api_demo.create_alert(data_api_demo.AlertIn(source="self"), "550e8400-e29b-41d4-a716-446655440000", repo, claims)["id"] == alert_id
+    assert data_api_demo.create_alert(data_api_demo.AlertIn(source="self"), "550e8400-e29b-41d4-a716-446655440000", None, repo, claims)["id"] == alert_id
     claimed = data_api_demo.claim(alert_id, data_api_demo.ActionIn(version=1), admin, repo)
     assigned = data_api_demo.assign(alert_id, data_api_demo.AssignIn(version=claimed["version"], staff_id=1), admin, repo)
     assert assigned["notification"] == "demo_notification_recorded"
     assert data_api_demo.resolve(alert_id, data_api_demo.ActionIn(version=assigned["alert"]["version"]), admin, repo)["status"] == "resolved"
+
+
+def test_student_registration_and_guest_detail_update():
+    repo, claims = FakeRepo(), FakeLedger()
+    created = data_api_demo.register(data_api_demo.RegisterIn(name="Student One", email="student@example.edu", password="Password1!"), repo)
+    assert created["role"] == "reporter"
+    alert = data_api_demo.create_alert(data_api_demo.AlertIn(source="self"), "550e8400-e29b-41d4-a716-446655440001", None, repo, claims)
+    repo.alerts[alert["id"]]["guest_token_hash"] = data_api_demo.sha256(alert["guest_token"].encode()).hexdigest()
+    updated = data_api_demo.update_details(alert["id"], data_api_demo.DetailsIn(place_name="Library", location_text="Ground floor"), alert["guest_token"], repo)
+    assert updated["place_id"] == 1
+    assert updated["location_text"] == "Ground floor"
+
+
+def test_guest_can_request_urgent_follow_up_without_creating_a_duplicate_alert():
+    repo, claims = FakeRepo(), FakeLedger()
+    alert = data_api_demo.create_alert(data_api_demo.AlertIn(source="bystander"), "550e8400-e29b-41d4-a716-446655440002", None, repo, claims)
+    repo.alerts[alert["id"]]["guest_token_hash"] = data_api_demo.sha256(alert["guest_token"].encode()).hexdigest()
+    result = data_api_demo.escalate(alert["id"], alert["guest_token"], repo)
+    assert result["id"] == alert["id"]
+    assert result["escalated"] is True

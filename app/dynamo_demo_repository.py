@@ -36,9 +36,15 @@ class DynamoDemoRepository:
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ConditionalCheckFailedException": raise
         for i, (name, kind) in enumerate(PLACES, 1):
-            self.table.put_item(Item={"pk":"PLACE", "sk":f"{i:03}", "id":i, "name":name, "kind":kind, "active":True})
+            try:
+                self.table.put_item(Item={"pk":"PLACE", "sk":f"{i:03}", "id":i, "name":name, "kind":kind, "active":True}, ConditionExpression="attribute_not_exists(pk)")
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "ConditionalCheckFailedException": raise
         for i, (name, kind, shift) in enumerate(CONTACTS, 1):
-            self.table.put_item(Item={"pk":"CONTACT", "sk":f"{i:03}", "id":i, "name":name, "kind":kind, "shift":shift, "active":True})
+            try:
+                self.table.put_item(Item={"pk":"CONTACT", "sk":f"{i:03}", "id":i, "name":name, "kind":kind, "shift":shift, "active":True}, ConditionExpression="attribute_not_exists(pk)")
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "ConditionalCheckFailedException": raise
 
     def _all(self, **kwargs: Any) -> list[dict]:
         result = self.table.scan(**kwargs); items = result.get("Items", [])
@@ -52,6 +58,8 @@ class DynamoDemoRepository:
         return self.table.get_item(Key={"pk":f"USER#{user_id}","sk":"PROFILE"}).get("Item")
     def places(self): return sorted((x for x in self._all() if x.get("pk")=="PLACE" and x.get("active")), key=lambda x:x["name"])
     def contacts(self): return sorted((x for x in self._all() if x.get("pk")=="CONTACT"), key=lambda x:x["name"])
+    def place_by_name(self, name: str):
+        return next((place for place in self.places() if place["name"].lower() == name.lower()), None)
     def alert(self, alert_id: int): return self.table.get_item(Key={"pk":self._pk(alert_id),"sk":"META"}).get("Item")
     def events(self, alert_id: int): return sorted((x for x in self._all() if x.get("pk")==self._pk(alert_id) and x.get("sk","").startswith("EVENT#")), key=lambda x:x["sk"])
     def queue(self): return sorted((x for x in self._all() if x.get("sk")=="META" and x.get("pk","").startswith("ALERT#")), key=lambda x:x["created_at"], reverse=True)[:100]
@@ -60,10 +68,72 @@ class DynamoDemoRepository:
         return int(self.table.update_item(Key={"pk":"COUNTER","sk":"ALERT"}, UpdateExpression="ADD #n :one", ExpressionAttributeNames={"#n":"next"}, ExpressionAttributeValues={":one":1}, ReturnValues="UPDATED_NEW")["Attributes"]["next"])
     def _event(self, alert_id:int, action:str, actor_id:int|None=None, note:str|None=None) -> None:
         self.table.put_item(Item={"pk":self._pk(alert_id),"sk":f"EVENT#{time.time_ns()}","action":action,"actor_id":actor_id,"note":note,"created_at":self._now()})
-    def create_alert(self, *, idempotency_key:str, source:str, guest_token_hash:str) -> int:
+    def create_alert(self, *, idempotency_key:str, source:str, guest_token_hash:str, reporter_id: int | None = None) -> int:
         alert_id=self._next_id(); now=self._now()
-        self.table.put_item(Item={"pk":self._pk(alert_id),"sk":"META","id":alert_id,"source":source,"guest_token_hash":guest_token_hash,"status":"new","verification":"unverified","version":1,"created_at":now,"updated_at":now,"idempotency_key":idempotency_key})
-        self._event(alert_id,"created"); return alert_id
+        self.table.put_item(Item={"pk":self._pk(alert_id),"sk":"META","id":alert_id,"source":source,"reporter_id":reporter_id,"identity_verified":bool(reporter_id),"guest_token_hash":guest_token_hash,"status":"new","verification":"unverified","version":1,"created_at":now,"updated_at":now,"idempotency_key":idempotency_key})
+        self._event(alert_id,"created", reporter_id); return alert_id
+
+    def register_student(self, name: str, email: str, password: str) -> dict | None:
+        if self.find_user_by_email(email): return None
+        user_id = int(self.table.update_item(Key={"pk":"COUNTER","sk":"USER"}, UpdateExpression="ADD #n :one", ExpressionAttributeNames={"#n":"next"}, ExpressionAttributeValues={":one":1}, ReturnValues="UPDATED_NEW")["Attributes"]["next"]) + 100
+        user = {"pk":f"USER#{user_id}","sk":"PROFILE","id":user_id,"name":name,"email":email.lower(),"password_hash":hash_password(password),"role":"reporter","must_reset_password":False,"created_at":self._now()}
+        try:
+            self.table.put_item(Item=user, ConditionExpression="attribute_not_exists(pk)")
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException": return None
+            raise
+        return user
+
+    def update_alert_details(self, alert_id: int, **details: Any):
+        alert = self.alert(alert_id)
+        if not alert: return None
+        values={":now":self._now(),":one":1}; sets=["updated_at = :now", "version = version + :one"]
+        allowed={"place_id","location_text","callback_phone","details","latitude","longitude","accuracy_m"}
+        for field, value in details.items():
+            if field in allowed and value is not None:
+                token=f":{field}"; sets.append(f"{field} = {token}"); values[token]=value
+        self.table.update_item(Key={"pk":self._pk(alert_id),"sk":"META"},UpdateExpression="SET "+", ".join(sets),ExpressionAttributeValues=values)
+        self._event(alert_id,"details_updated")
+        return self.alert(alert_id)
+
+    def escalate_alert(self, alert_id: int):
+        alert=self.alert(alert_id)
+        if not alert: return None
+        self._event(alert_id, "student_escalated", note="Student requested urgent follow-up")
+        return alert
+
+    def create_contact(self, name: str, kind: str, phone: str | None, shift: str) -> dict:
+        contact_id=int(self.table.update_item(Key={"pk":"COUNTER","sk":"CONTACT"},UpdateExpression="ADD #n :one",ExpressionAttributeNames={"#n":"next"},ExpressionAttributeValues={":one":1},ReturnValues="UPDATED_NEW")["Attributes"]["next"]) + 100
+        contact={"pk":"CONTACT","sk":f"{contact_id:03}","id":contact_id,"name":name,"kind":kind,"phone":phone,"shift":shift,"active":True,"created_at":self._now()}
+        self.table.put_item(Item=contact); return contact
+
+    def update_contact(self, contact_id: int, **changes: Any):
+        contact=next((x for x in self.contacts() if x["id"] == contact_id),None)
+        if not contact: return None
+        values={}; sets=[]
+        for field in ("phone","shift","active","name","kind"):
+            if field in changes:
+                token=f":{field}"; values[token]=changes[field]; sets.append(f"{field} = {token}")
+        if not sets: return contact
+        self.table.update_item(Key={"pk":"CONTACT","sk":contact["sk"]},UpdateExpression="SET "+", ".join(sets),ExpressionAttributeValues=values)
+        return next(x for x in self.contacts() if x["id"] == contact_id)
+
+    def save_coverage(self, place_id: int, staff_id: int, rank: int) -> dict | None:
+        if not next((x for x in self.places() if x["id"] == place_id), None): return None
+        contact=next((x for x in self.contacts() if x["id"] == staff_id),None)
+        if not contact: return None
+        item={"pk":f"COVERAGE#{place_id}","sk":f"{rank:03}#{staff_id}","place_id":place_id,"staff_id":staff_id,"rank":rank,"created_at":self._now()}
+        self.table.put_item(Item=item); return item
+
+    def coverage(self, place_id: int) -> list[dict]:
+        contacts={x["id"]:x for x in self.contacts()}
+        rows=sorted((x for x in self._all() if x.get("pk") == f"COVERAGE#{place_id}"), key=lambda x:x["rank"])
+        return [{**contacts[row["staff_id"]],"rank":row["rank"]} for row in rows if row["staff_id"] in contacts]
+
+    def record_staff_response(self, alert_id: int, actor_id: int, kind: str, note: str):
+        if not self.alert(alert_id): return None
+        self._event(alert_id, kind, actor_id, note)
+        return self.alert(alert_id)
     def conditional_action(self, alert_id:int, version:int, actor_id:int, *, status=None, verification=None, action:str, note=None):
         values={":old":version,":one":1,":now":self._now()}; sets=["version = version + :one","updated_at = :now"]
         names = None
