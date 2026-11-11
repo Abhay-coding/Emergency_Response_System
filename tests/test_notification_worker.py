@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -7,7 +8,14 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import MedicalAlert, NotificationJob, utc_now
 from app.core.config import settings
-from app.services.notifications import process_due_jobs
+from app.services.notifications import ConfigurationError, _send, process_due_jobs
+
+
+def test_demo_mode_blocks_real_provider_even_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "dynamo_demo_enabled", True)
+    monkeypatch.setattr(settings, "notification_mode", "sns")
+    with pytest.raises(ConfigurationError, match="disabled in demo mode"):
+        _send("DEMO-001", 1, "assignment")
 
 
 def test_acknowledged_alert_cancels_backup(monkeypatch):

@@ -93,6 +93,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self' https://fonts.gstatic.com; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "
+                "frame-src https://www.openstreetmap.org; "
                 "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
             )
         else:

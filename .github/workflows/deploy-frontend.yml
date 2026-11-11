@@ -72,12 +72,14 @@ jobs:
             init() {
               const urlParams = new URLSearchParams(window.location.search);
               const apiUrlParam = urlParams.get('api_url');
-              if (apiUrlParam) {
+              const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+              const localApi = (value) => { try { const u = new URL(value); return ['http:', 'https:'].includes(u.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) && !u.username && !u.password; } catch (e) { return false; } };
+              if (localPage && apiUrlParam && localApi(apiUrlParam)) {
                 this.API_BASE_URL = apiUrlParam;
               }
               try {
                 const stored = localStorage.getItem('cer_api_url');
-                if (stored && !apiUrlParam) {
+                if (localPage && stored && !apiUrlParam && localApi(stored)) {
                   this.API_BASE_URL = stored;
                 }
               } catch (e) {}
@@ -88,6 +90,8 @@ jobs:
               return this;
             },
             setApiUrl(url) {
+              const parsed = new URL(url);
+              if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname) || !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) || !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('API overrides are only available for local development');
               this.API_BASE_URL = url.replace(/\/$/, '');
               try { localStorage.setItem('cer_api_url', this.API_BASE_URL); } catch (e) {}
             },

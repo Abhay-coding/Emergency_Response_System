@@ -20,6 +20,9 @@ def client_with_db():
     )
     Base.metadata.create_all(engine)
     maker = sessionmaker(bind=engine, expire_on_commit=False)
+    from app.routers.medical_alerts import seed_places
+    with maker() as db:
+        seed_places(db)
 
     def override_db():
         with maker() as db:

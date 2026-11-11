@@ -153,6 +153,8 @@ def _phone_for_job(db: Session, job: NotificationJob) -> str:
 
 def _send(phone: str, alert_id: int, kind: str) -> None:
     """Send notification via SNS."""
+    if settings.dynamo_demo_enabled:
+        raise ConfigurationError("Real outbound notifications are disabled in demo mode")
     if settings.notification_mode != "sns":
         raise ConfigurationError("Outbound notification provider is not configured")
 
@@ -224,35 +226,20 @@ def process_due_jobs(db: Session, limit: int = 25) -> int:
         # Use UPDATE-then-SELECT pattern to atomically claim jobs
         from sqlalchemy import update as sqlalchemy_update
 
-        # Atomically update pending jobs to "processing" status
-        # Only update up to `limit` jobs, and filter out jobs that should be cancelled
-        result = db.execute(
-            sqlalchemy_update(NotificationJob)
-            .where(
-                NotificationJob.status == "pending",
-                NotificationJob.due_at <= now,
-                # Exclude jobs that should be cancelled (join with MedicalAlert)
-                ~NotificationJob.alert_id.in_(
-                    db.query(MedicalAlert.id).filter(
-                        (MedicalAlert.closed_at.isnot(None)) |
-                        ((NotificationJob.kind == "backup_escalation") & (MedicalAlert.acknowledged_at.isnot(None)))
-                    )
-                )
-            )
-            .values(status="processing")
-            .order_by(NotificationJob.due_at, NotificationJob.id)
-            .limit(limit)
-        )
-
-        if result.rowcount == 0:
+        # Claim each candidate conditionally. This works on older SQLite
+        # versions without RETURNING and records exactly what this worker won.
+        due_ids = (db.query(NotificationJob.id).filter(
+            NotificationJob.status == "pending", NotificationJob.due_at <= now
+        ).order_by(NotificationJob.due_at, NotificationJob.id).limit(limit).all())
+        claimed_ids=[]
+        for (job_id,) in due_ids:
+            result=db.execute(sqlalchemy_update(NotificationJob).where(
+                NotificationJob.id == job_id, NotificationJob.status == "pending"
+            ).values(status="processing"))
+            if result.rowcount: claimed_ids.append(job_id)
+        if not claimed_ids:
             return 0
-
-        # Select the jobs we just claimed
-        jobs = db.query(NotificationJob).filter(
-            NotificationJob.status == "processing"
-        ).order_by(
-            NotificationJob.due_at, NotificationJob.id
-        ).limit(limit).all()
+        jobs = db.query(NotificationJob).filter(NotificationJob.id.in_(claimed_ids)).order_by(NotificationJob.due_at, NotificationJob.id).all()
     else:
         # PostgreSQL/MySQL: use FOR UPDATE SKIP LOCKED
         # Also join with MedicalAlert to atomically check alert status
@@ -283,6 +270,9 @@ def process_due_jobs(db: Session, limit: int = 25) -> int:
         alert = db.get(MedicalAlert, job.alert_id)
 
         try:
+            if not alert or alert.closed_at is not None or (job.kind == "backup_escalation" and alert.acknowledged_at is not None):
+                _update_job_status(db, job, "cancelled")
+                continue
             phone = _phone_for_job(db, job)
 
             if settings.notification_mode == "simulation":
