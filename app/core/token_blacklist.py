@@ -399,6 +399,8 @@ class TokenBlacklist:
                 # Fall through to local-only logic
 
         # Fallback: local-only logic (when Redis unavailable)
+        should_revoke = False
+        rotation_valid = False
         with self._lock:
             family = self._local_families.get(family_id)
 
@@ -446,6 +448,7 @@ class TokenBlacklist:
 
             # Valid rotation - reset theft attempts on successful rotation
             else:
+                rotation_valid = True
                 family.theft_attempts = 0
                 family.last_theft_attempt = 0.0
                 family.current_token_jti = new_jti
@@ -466,7 +469,7 @@ class TokenBlacklist:
                 for jti in family_data_to_sync.seen_jtis:
                     self._local_blacklist.add(jti)
 
-            return not should_revoke
+            return rotation_valid
 
     def revoke_family(self, family_id: str) -> None:
         """Revoke an entire token family (logout from all devices) atomically"""

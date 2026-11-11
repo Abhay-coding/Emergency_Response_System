@@ -103,7 +103,7 @@ class DataAPIRepository:
         except Exception:
             self.rollback(tx); raise
 
-    def assign_staff(self, alert_id: int, version: int, actor_id: int, staff_id: int) -> dict[str, Any] | None:
+    def assign_staff(self, alert_id: int, version: int, actor_id: int, staff_id: int, method: str = "notification") -> dict[str, Any] | None:
         tx = self.begin_transaction()
         try:
             updated = self.execute("UPDATE medical_alerts SET status = 'staff_alerted', version = version + 1, updated_at = NOW() WHERE id = :id AND version = :version RETURNING id", [{"name":"id","value":{"longValue":alert_id}},{"name":"version","value":{"longValue":version}}], tx)

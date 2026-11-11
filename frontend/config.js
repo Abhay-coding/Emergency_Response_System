@@ -28,7 +28,7 @@ window.CER_CONFIG = {
     ENABLE_GEOLOCATION: true,
     ENABLE_NOTIFICATIONS: true,
     ENABLE_MESSAGES: false,
-    ENABLE_LOCATION_UPDATES: false,
+    ENABLE_LOCATION_UPDATES: true,
   },
 
   // Build info (populated at build time)
@@ -53,10 +53,17 @@ window.CER_CONFIG = {
 
   // Initialize config from environment or URL params (for easy testing)
   init() {
+    // Production pages must not accept a query-string or localStorage URL:
+    // that could send credentials and alert details to an unrelated server.
+    const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+    const localApi = (value) => {
+      try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !url.username && !url.password; }
+      catch { return false; }
+    };
     // Check for URL parameter override (useful for testing)
     const urlParams = new URLSearchParams(window.location.search);
     const apiUrlParam = urlParams.get('api_url');
-    if (apiUrlParam) {
+    if (localPage && apiUrlParam && localApi(apiUrlParam)) {
       this.API_BASE_URL = apiUrlParam;
       console.log('[CER_CONFIG] API URL overridden via URL param:', this.API_BASE_URL);
     }
@@ -64,7 +71,7 @@ window.CER_CONFIG = {
     // Check for localStorage override (persisted user preference)
     try {
       const stored = localStorage.getItem('cer_api_url');
-      if (stored && !apiUrlParam) {
+      if (localPage && stored && !apiUrlParam && localApi(stored)) {
         this.API_BASE_URL = stored;
         console.log('[CER_CONFIG] API URL loaded from localStorage:', this.API_BASE_URL);
       }
@@ -91,6 +98,8 @@ window.CER_CONFIG = {
 
   // Set API URL programmatically (call before app init)
   setApiUrl(url) {
+    const parsed = new URL(url);
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname) || !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) || !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('API overrides are only available for local development');
     this.API_BASE_URL = url.replace(/\/$/, ''); // Remove trailing slash
     try {
       localStorage.setItem('cer_api_url', this.API_BASE_URL);
