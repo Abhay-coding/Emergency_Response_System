@@ -20,3 +20,5 @@
 .emergency-card .service-status{font-size:13px;font-weight:700;color:#526376;margin-top:12px}
 .demo-team{padding:10px 13px;background:#e9f1f7;border-radius:8px;color:#19344f;font-weight:700;font-size:14px}
 .request-panel{max-width:960px;margin-left:auto;margin-right:auto}
+.presentation-panel { padding: 1rem; margin-bottom: 1.25rem; }
+.presentation-panel summary { cursor: pointer; font-weight: 700; }

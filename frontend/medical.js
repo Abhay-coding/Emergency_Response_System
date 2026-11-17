@@ -101,7 +101,7 @@ function renderStudentStatus(alert) {
   $('location-state').textContent=alert.latitude!=null&&alert.longitude!=null?`Device location saved: ${Number(alert.latitude).toFixed(5)}, ${Number(alert.longitude).toFixed(5)}. Add a room or landmark if possible.`:alert.place_id||alert.location_text?'Manual location saved with this demo alert.':'Location not yet shared. Choose your campus location below.';
   const mapKey=`${alert.latitude},${alert.longitude}`;if($('student-map').dataset.location!==mapKey){$('student-map').dataset.location=mapKey;renderLocationMap($('student-map'),alert.latitude,alert.longitude);}
   const stage={new:'new',acknowledged:'acknowledged',checking:'acknowledged',contact_pending:'acknowledged',staff_alerted:'staff',medical_dispatched:'medical',en_route:'en-route',arrived:'arrived',resolved:'resolved'}[alert.status];
-  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:'Demo contact accepted',medical:'Demo dispatch','en-route':'Demo en route',arrived:'Demo arrived',resolved:'Resolved'};
+  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:'Contact accepted (simulated)',medical:'Dispatch (simulated)','en-route':'En route (simulated)',arrived:'Arrived (simulated)',resolved:'Resolved'};
   ['new','acknowledged','staff','medical','en-route','arrived','resolved'].forEach(part=>{const el=$('progress-'+part),event=(alert.history||[]).find(entry=>entry.stage===part);el.classList.toggle('active',part===stage);el.classList.toggle('completed',!!event&&part!==stage);el.textContent=labelsByStage[part];if(event?.created_at){const time=document.createElement('small');time.textContent=new Date(event.created_at).toLocaleString();el.append(time);}if(part===stage)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
 }
 
@@ -171,8 +171,8 @@ async function refreshAdmin() {
   } catch(e) { toast(`Could not load admin queue: ${e.message}`,true); }
 }
 function renderOperations(ops) {
-  const pill=$('operations-pill'); pill.textContent=ops.live_ready?'Live contact setup ready':'Prototype / setup needed'; pill.classList.toggle('warn',!ops.live_ready);
-  const issues=[]; if(ops.notification_mode!=='sns') issues.push('Outbound alerts are simulated.'); if(!ops.backup_configured) issues.push('Backup contact is missing.'); if(!ops.campus_emergency_phone_configured) issues.push('Campus emergency phone is missing.'); if(ops.failed_jobs) issues.push(`${ops.failed_jobs} notification job(s) failed.`);
+  const pill=$('operations-pill'); pill.textContent=ops.live_ready?'Contact setup ready':'Simulation active'; pill.classList.toggle('warn',!ops.live_ready);
+  const issues=[]; if(ops.notification_mode!=='sns') issues.push('Simulation only: no real calls, notifications or dispatches.'); if(ops.failed_jobs) issues.push(`${ops.failed_jobs} notification job(s) failed.`);
   const warning=$('operations-warning'); warning.textContent=issues.join(' '); warning.classList.toggle('hidden',!issues.length);
 }
 function renderQueue(force=false) {
@@ -182,10 +182,10 @@ function renderQueue(force=false) {
   state.queueSnapshot=snapshot;
   const open=state.alerts.filter(a=>!['resolved','closed_false_report'].includes(a.status)); $('queue-count').textContent=open.length;
   const dispatched=['medical_dispatched','en_route','arrived'];
-  const cards=[['New alerts',state.alerts.filter(a=>a.status==='new').length],['Active emergencies',open.length],['Awaiting verification',open.filter(a=>a.verification!=='confirmed_need').length],['Demo teams dispatched',open.filter(a=>dispatched.includes(a.status)).length],['Resolved cases',state.alerts.filter(a=>a.status==='resolved').length]];
+  const cards=[['New alerts',state.alerts.filter(a=>a.status==='new').length],['Active emergencies',open.length],['Awaiting verification',open.filter(a=>a.verification!=='confirmed_need').length],['Simulated dispatches',open.filter(a=>dispatched.includes(a.status)).length],['Resolved cases',state.alerts.filter(a=>a.status==='resolved').length]];
   $('dashboard-overview').innerHTML=cards.map(([label,count])=>`<div class="overview-card"><span>${label}</span><strong>${count}</strong></div>`).join('');
   const shown=state.alerts.filter(a=>{const closed=['resolved','closed_false_report'].includes(a.status);if(filter==='open'&&closed||filter==='closed'&&!closed||filter==='unverified'&&(closed||a.verification==='confirmed_need')||filter==='dispatched'&&!dispatched.includes(a.status))return false;return `${a.id} ${queueLocation(a)} ${a.location_text||''} ${a.status}`.toLowerCase().includes(query);});
-  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>Demo alert #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(queueLocation(a))}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||(a.latitude!=null&&a.longitude!=null)?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
+  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>Alert #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(queueLocation(a))}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||(a.latitude!=null&&a.longitude!=null)?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
   $('admin-queue').querySelectorAll('[data-alert-id]').forEach(button=>button.addEventListener('click',()=>selectAlert(Number(button.dataset.alertId))));
 }
 
@@ -201,7 +201,7 @@ async function selectAlert(id) {
   const hasCoordinates=alert.latitude!=null&&alert.longitude!=null;
   locationWarning.textContent=!(hasCoordinates||alert.place_id||alert.location_text) ? 'Location missing — ask the reporter for a campus place, room or landmark.' : hasCoordinates&&alert.accuracy_m!=null&&Number(alert.accuracy_m)>100 ? 'Approximate GPS location may be imprecise — confirm the campus place and room.' : 'Location is not confirmed — verify the campus place and room or landmark.';
   $('admin-detail').querySelector('.detail-facts').after(locationWarning);
-  if(alert.contact_name){const team=document.createElement('p');team.className='demo-team';const outcome=alert.status==='contact_pending'?'Awaiting simulated response':friendly(alert.contact_outcome||'pending');team.textContent=`Demo contact: ${alert.contact_name} · ${outcome} (simulated)`;$('admin-detail').querySelector('.detail-facts').after(team);}
+  if(alert.contact_name){const team=document.createElement('p');team.className='demo-team';const outcome=alert.status==='contact_pending'?'Awaiting simulated response':friendly(alert.contact_outcome||'pending');team.textContent=`Contact: ${alert.contact_name} · ${outcome} (simulated)`;$('admin-detail').querySelector('.detail-facts').after(team);}
   $('action-note').value=state.actionDrafts[id]||'';
   $('action-note').addEventListener('input',event=>{state.actionDrafts[id]=event.target.value;});
   const closed=['resolved','closed_false_report'].includes(alert.status), reviewing=['new','acknowledged','checking'].includes(alert.status), accepted=['staff_alerted','medical_dispatched','en_route','arrived'].includes(alert.status);
@@ -210,20 +210,17 @@ async function selectAlert(id) {
   if(alert.latitude!=null && alert.longitude!=null) { const map=document.createElement('a'); map.className='button button-soft'; map.target='_blank'; map.rel='noopener noreferrer'; map.href=`https://www.openstreetmap.org/?mlat=${encodeURIComponent(alert.latitude)}&mlon=${encodeURIComponent(alert.longitude)}#map=18/${encodeURIComponent(alert.latitude)}/${encodeURIComponent(alert.longitude)}`; map.textContent='Open reported location on map'; $('admin-detail').querySelector('.detail-facts').after(map); }
   if(alert.latitude!=null && alert.longitude!=null){const mapPanel=document.createElement('div');mapPanel.className='map-panel';$('admin-detail').querySelector('.detail-facts').after(mapPanel);renderLocationMap(mapPanel,alert.latitude,alert.longitude);}
   $('staff-choice').addEventListener('change',()=>{ $('staff-call').classList.add('hidden'); });
-  const method=document.createElement('select');method.id='demo-contact-method';method.setAttribute('aria-label','Simulated contact method');method.innerHTML='<option value="notification">Simulate notification</option><option value="call">Simulate call</option>'; $('staff-send').before(method);$('staff-send').textContent='Start simulation';
-  $('admin-detail').querySelector('[data-action="dispatch-medical"]').textContent='Simulate medical dispatch';
+  const method=document.createElement('select');method.id='demo-contact-method';method.setAttribute('aria-label','Simulated contact method');method.innerHTML='<option value="notification">Notification (simulated)</option><option value="call">Call (simulated)</option>'; $('staff-send').before(method);$('staff-send').textContent='Record contact attempt';
+  $('admin-detail').querySelector('[data-action="dispatch-medical"]').textContent='Record simulated dispatch';
   $('staff-send').addEventListener('click',sendStaffAlert);
   $('staff-send').disabled=closed || !reviewing;
-  const autoDemo=document.createElement('button');autoDemo.type='button';autoDemo.className='button button-soft';autoDemo.textContent=state.autoDemoRunning?'Automatic demo running…':'Run automatic presentation';autoDemo.disabled=state.autoDemoRunning||!reviewing;autoDemo.addEventListener('click',runAutomaticDemo);
-  const autoDescription=document.createElement('p');autoDescription.className='muted';autoDescription.textContent='Choose a demo contact first. Runs while this page stays open; no real contact or dispatch occurs.';
-  $('staff-send').closest('.detail-section').append(autoDemo,autoDescription);
   if (['medical_dispatched','en_route','arrived'].includes(alert.status)) {
-    const next=document.createElement('button'); next.type='button'; next.className='button button-navy'; next.textContent={'medical_dispatched':'Simulate team en route','en_route':'Simulate team arrived','arrived':'Resolve demo request'}[alert.status];
+    const next=document.createElement('button'); next.type='button'; next.className='button button-navy'; next.textContent={'medical_dispatched':'Mark en route (simulated)','en_route':'Mark arrived (simulated)','arrived':'Resolve request'}[alert.status];
     next.addEventListener('click',()=>adminAction('demo-progress')); $('staff-send').parentElement.after(next);
   }
   const responseSection=$('admin-message-form')?.closest('.detail-section');
   if (responseSection) {
-    responseSection.innerHTML='<h4>Demo staff response</h4><p class="muted">Record a fictional response for the demo. No call or message is sent.</p><div class="action-row"><button id="record-staff-ack" class="button button-soft" type="button">Simulate acknowledgement</button></div><label for="staff-findings"><strong>Demo findings</strong></label><textarea id="staff-findings" rows="2" placeholder="Enter fictional findings"></textarea><button id="record-staff-findings" class="button button-navy" type="button">Record demo findings</button>';
+    responseSection.innerHTML='<h4>Staff response</h4><p class="muted">Record a simulated response; no call or message is sent.</p><div class="action-row"><button id="record-staff-ack" class="button button-soft" type="button">Record acknowledgement</button></div><label for="staff-findings"><strong>Staff findings</strong></label><textarea id="staff-findings" rows="2" placeholder="Enter simulated findings"></textarea><button id="record-staff-findings" class="button button-navy" type="button">Record findings</button>';
     $('record-staff-ack').addEventListener('click',()=>recordStaffResponse('staff-acknowledged'));
     $('record-staff-findings').addEventListener('click',()=>recordStaffResponse('staff-findings'));
     $('record-staff-ack').disabled=closed||!accepted; $('record-staff-findings').disabled=closed||!accepted;
@@ -235,7 +232,7 @@ function organizeAlertDetails(verification,responseSection){
   const body=$('admin-detail').querySelector('.detail-body'),facts=body.querySelector('.detail-facts'),actions=body.querySelector('.action-row'),staff=$('staff-choice').closest('.detail-section'),activity=$('event-list').closest('.detail-section');
   const noteLabel=body.querySelector('label[for="action-note"]'),note=$('action-note'),header=body.querySelector('.detail-heading');
   const map=body.querySelector('.map-panel'),mapLink=[...body.querySelectorAll('a')].find(a=>a.textContent==='Open reported location on map');
-  const progress=[...body.querySelectorAll('button')].find(button=>['Simulate team en route','Simulate team arrived','Resolve demo request'].includes(button.textContent));
+  const progress=[...body.querySelectorAll('button')].find(button=>['Mark en route (simulated)','Mark arrived (simulated)','Resolve request'].includes(button.textContent));
   const nav=document.createElement('div');nav.className='detail-tabs';nav.setAttribute('role','tablist');nav.setAttribute('aria-label','Alert details');
   const panels={overview:document.createElement('section'),verification:document.createElement('section'),dispatch:document.createElement('section'),activity:document.createElement('section')};
   const labels={overview:'Overview',verification:'Verification',dispatch:'Contact & dispatch',activity:'Activity'};
@@ -263,9 +260,9 @@ async function adminAction(action) {
 async function saveVerification(){const alertId=state.selected,note=$('action-note').value.trim(),alert=state.alerts.find(a=>a.id===alertId);if(note.length<2){toast('Add verification notes first.',true);$('action-note').focus();return;}try{await api(`/medical-alerts/${alertId}/verification`,{method:'POST',json:{version:alert.version,verification:$('verification-choice').value,note}});if(state.actionDrafts[alertId]?.trim()===note)delete state.actionDrafts[alertId];toast('Verification saved.');await refreshAdmin();}catch(e){toast(userMessage(e),true);if(e.status===409)await refreshAdmin();}}
 async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a demo contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version,method:$('demo-contact-method').value}});toast('Demo contact attempt recorded. No message or call was sent.');refreshAdmin();}catch(e){toast(userMessage(e),true);} }
 async function runAutomaticDemo(){
-  const alertId=state.selected, staffId=Number($('staff-choice').value), method=$('demo-contact-method').value;
+  const alertId=state.selected, staffId=Number($('presentation-contact').value), method='notification';
   if(state.autoDemoRunning)return;
-  if(!staffId){toast('Choose a demo contact first.',true);return;}
+  if(!alertId||!staffId){toast('Select an alert and a contact first.',true);return;}
   state.autoDemoRunning=true;
   const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const current=async()=>{const row=(await api('/medical-alerts/admin/queue')).find(a=>a.id===alertId);if(!row)throw Error('Demo alert is no longer available');return row;};
@@ -295,9 +292,12 @@ function renderContacts() {
   const snapshot=JSON.stringify(state.contacts);
   if(snapshot===state.contactsSnapshot)return;
   state.contactsSnapshot=snapshot;
-  $('contact-list').innerHTML=state.contacts.length?state.contacts.map(c=>`<div class="contact-item"><strong>${escapeHtml(c.name)}</strong><small>${friendly(c.kind)} · ${friendly(c.shift)} · ${c.active?'available':'unavailable'}</small><small>${escapeHtml(c.phone||'DEMO')} · fictional demo identifier</small><details><summary>Edit demo contact</summary><form class="contact-edit" data-contact-id="${c.id}"><label>Shift<select name="shift"><option value="all" ${c.shift==='all'?'selected':''}>All hours</option><option value="day" ${c.shift==='day'?'selected':''}>Day</option><option value="night" ${c.shift==='night'?'selected':''}>Night</option></select></label><label>Simulated outcome<select name="outcome"><option value="accepted" ${(!c.outcome||c.outcome==='accepted')?'selected':''}>Accepted</option><option value="no_answer" ${c.outcome==='no_answer'?'selected':''}>No answer</option><option value="unavailable" ${c.outcome==='unavailable'?'selected':''}>Unavailable</option></select></label><label class="contact-active"><input type="checkbox" name="active" ${c.active?'checked':''}> Available for simulation</label><button class="button button-navy" type="submit">Save contact</button></form></details></div>`).join(''):'<p class="muted">Add a demo contact to start a simulation.</p>';
+  $('contact-list').innerHTML=state.contacts.length?state.contacts.map(c=>`<div class="contact-item"><strong>${escapeHtml(c.name)}</strong><small>${friendly(c.kind)} · ${friendly(c.shift)} · ${c.active?'available':'unavailable'}</small><small>${escapeHtml(c.phone||'DEMO')} · fictional demo identifier</small><details><summary>Edit contact</summary><form class="contact-edit" data-contact-id="${c.id}"><label>Shift<select name="shift"><option value="all" ${c.shift==='all'?'selected':''}>All hours</option><option value="day" ${c.shift==='day'?'selected':''}>Day</option><option value="night" ${c.shift==='night'?'selected':''}>Night</option></select></label><label>Simulated outcome<select name="outcome"><option value="accepted" ${(!c.outcome||c.outcome==='accepted')?'selected':''}>Accepted</option><option value="no_answer" ${c.outcome==='no_answer'?'selected':''}>No answer</option><option value="unavailable" ${c.outcome==='unavailable'?'selected':''}>Unavailable</option></select></label><label class="contact-active"><input type="checkbox" name="active" ${c.active?'checked':''}> Available for simulation</label><button class="button button-navy" type="submit">Save contact</button></form></details></div>`).join(''):'<p class="muted">Add a demo contact to start a simulation.</p>';
   $('contact-list').querySelectorAll('.contact-edit').forEach(form=>{const contact=state.contacts.find(c=>c.id===Number(form.dataset.contactId));const label=document.createElement('label');label.textContent='Response delay (seconds)';const input=document.createElement('input');input.type='number';input.name='delay_seconds';input.min='0';input.max='300';input.value=String(contact?.delay_seconds||0);label.append(input);form.querySelector('button').before(label);form.addEventListener('submit',updateContact);});
   $('coverage-staff').innerHTML='<option value="">Choose contact</option>'+state.contacts.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  const choice=$('presentation-contact'), previous=choice.value;
+  choice.innerHTML='<option value="">Choose a contact</option>'+state.contacts.filter(c=>c.active).map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  choice.value=previous;
 }
 function renderContactAssignments() {
   document.querySelectorAll('#contact-list .contact-edit').forEach(form=>{
@@ -338,7 +338,8 @@ async function connectDemoService(){
 }
 
 async function init(){
-  $('directory-title').textContent='Demo contacts'; $('contact-form').querySelector('h3').textContent='Add demo contact'; $('contact-phone').previousElementSibling.remove(); $('contact-phone').remove();
+  $('directory-title').textContent='Staff directory'; $('contact-form').querySelector('h3').textContent='Add contact'; $('contact-phone').previousElementSibling.remove(); $('contact-phone').remove();
+  $('presentation-start').addEventListener('click',runAutomaticDemo);
   document.querySelectorAll('.step-grid p')[1].textContent='An admin reviews the demo request and can simulate a contact.'; document.querySelectorAll('.step-grid p')[2].textContent='The dashboard simulates dispatch and team progress. No real services are contacted.';
   $('help-button').addEventListener('click',()=>startAlert('self'));
   $('bystander-button').addEventListener('click',()=>startAlert('bystander'));
