@@ -94,14 +94,14 @@ function renderStudentStatus(alert) {
     $('location-text').value=alert.location_text||'';$('callback-phone').value=alert.callback_phone||'';$('details').value=alert.details||'';
     state.detailsLoadedFor=alert.id;
   }
-  const labels={new:'Your alert has reached the demo admin queue.',acknowledged:'An admin is reviewing your demo request.',checking:'An admin is checking the details.',contact_pending:'A demo contact attempt is pending. No real call or message was sent.',staff_alerted:'A demo contact accepted. No one was contacted.',medical_dispatched:'Medical Team Dispatched — DEMO. No real team was dispatched.',en_route:'Team en route — DEMO. No real team is travelling.',arrived:'Team arrived — DEMO. No real team has arrived.',resolved:'This demo request has been marked resolved.',closed_false_report:'This request was closed after admin review.'};
+  const labels={new:'Your alert has reached the practice queue.',acknowledged:'An admin is reviewing your request.',checking:'An admin is checking the details.',contact_pending:'A simulated contact attempt is pending.',staff_alerted:'The simulated contact accepted.',medical_dispatched:'Simulated dispatch recorded.',en_route:'Simulated team marked en route.',arrived:'Simulated team marked arrived.',resolved:'This practice request has been marked resolved.',closed_false_report:'This request was closed after admin review.'};
   const banner=$('request-state'); banner.textContent=labels[alert.status]||friendly(alert.status); banner.classList.toggle('error',alert.status==='closed_false_report');
   $('status-updated').textContent=alert.updated_at?`Last updated: ${new Date(alert.updated_at).toLocaleString()}`:'';
-  $('demo-team').textContent=alert.demo_team?`Fictional demo team: ${alert.demo_team}. No real responder has been contacted.`:'';$('demo-team').classList.toggle('hidden',!alert.demo_team);
+  $('demo-team').textContent=alert.demo_team?`Practice contact: ${alert.demo_team}`:'';$('demo-team').classList.toggle('hidden',!alert.demo_team);
   $('location-state').textContent=alert.latitude!=null&&alert.longitude!=null?`Device location saved: ${Number(alert.latitude).toFixed(5)}, ${Number(alert.longitude).toFixed(5)}. Add a room or landmark if possible.`:alert.place_id||alert.location_text?'Manual location saved with this demo alert.':'Location not yet shared. Choose your campus location below.';
   const mapKey=`${alert.latitude},${alert.longitude}`;if($('student-map').dataset.location!==mapKey){$('student-map').dataset.location=mapKey;renderLocationMap($('student-map'),alert.latitude,alert.longitude);}
   const stage={new:'new',acknowledged:'acknowledged',checking:'acknowledged',contact_pending:'acknowledged',staff_alerted:'staff',medical_dispatched:'medical',en_route:'en-route',arrived:'arrived',resolved:'resolved'}[alert.status];
-  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:'Contact accepted (simulated)',medical:'Dispatch (simulated)','en-route':'En route (simulated)',arrived:'Arrived (simulated)',resolved:'Resolved'};
+  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:'Contact accepted',medical:'Dispatch','en-route':'En route',arrived:'Arrived',resolved:'Resolved'};
   ['new','acknowledged','staff','medical','en-route','arrived','resolved'].forEach(part=>{const el=$('progress-'+part),event=(alert.history||[]).find(entry=>entry.stage===part);el.classList.toggle('active',part===stage);el.classList.toggle('completed',!!event&&part!==stage);el.textContent=labelsByStage[part];if(event?.created_at){const time=document.createElement('small');time.textContent=new Date(event.created_at).toLocaleString();el.append(time);}if(part===stage)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
 }
 
@@ -171,8 +171,7 @@ async function refreshAdmin() {
   } catch(e) { toast(`Could not load admin queue: ${e.message}`,true); }
 }
 function renderOperations(ops) {
-  const pill=$('operations-pill'); pill.textContent=ops.live_ready?'Contact setup ready':'Simulation active'; pill.classList.toggle('warn',!ops.live_ready);
-  const issues=[]; if(ops.notification_mode!=='sns') issues.push('Simulation only: no real calls, notifications or dispatches.'); if(ops.failed_jobs) issues.push(`${ops.failed_jobs} notification job(s) failed.`);
+  const issues=[]; if(ops.failed_jobs) issues.push(`${ops.failed_jobs} notification job(s) failed.`);
   const warning=$('operations-warning'); warning.textContent=issues.join(' '); warning.classList.toggle('hidden',!issues.length);
 }
 function renderQueue(force=false) {
@@ -330,7 +329,7 @@ async function connectDemoService(){
     $('place').innerHTML='<option value="">Choose a building or hostel</option>'+places.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
     $('coverage-place').innerHTML='<option value="">Choose place</option>'+places.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     $('help-button').disabled=false;$('bystander-button').disabled=false;
-    $('service-status').textContent='Demo service connected. No real responders will be contacted.';
+    $('service-status').textContent='Practice service connected.';
     await restoreSession();showView();
   } catch(e) {
     $('service-status').textContent=`Demo unavailable: ${e.message} Retrying automatically. For a real emergency, call emergency services directly.`;

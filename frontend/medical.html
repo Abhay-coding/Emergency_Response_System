@@ -28,7 +28,7 @@
   <main id="main">
     <div class="notice-bar" role="note">
       <span class="notice-icon" aria-hidden="true">!</span>
-      <p><strong>DEMO MODE — No real medical services are contacted.</strong> For an actual emergency, call campus medical services or local emergency services directly.</p>
+      <p><strong>Simulation only — no real responders are contacted.</strong> For an actual emergency, call campus medical services or local emergency services directly.</p>
     </div>
 
     <section id="student-view" class="page-shell">
@@ -62,7 +62,7 @@
         <div class="request-head"><div><p class="eyebrow">YOUR REQUEST</p><h2 id="request-heading">Medical alert received</h2></div><span id="request-number" class="request-number"></span></div>
         <div id="request-state" class="status-banner" role="status" aria-live="polite">Sending your alert…</div>
         <p id="status-updated" class="muted"></p><p id="demo-team" class="demo-team hidden"></p><p id="location-state" class="location-state" role="status">Location not yet shared. Choose your campus location below.</p><div id="student-map"></div>
-        <ol class="progress-list" aria-label="Simulated response stages"><li id="progress-new" class="active">Alert received</li><li id="progress-acknowledged">Admin reviewing</li><li id="progress-staff">Contact accepted (simulated)</li><li id="progress-medical">Dispatch (simulated)</li><li id="progress-en-route">En route (simulated)</li><li id="progress-arrived">Arrived (simulated)</li><li id="progress-resolved">Resolved</li></ol>
+        <ol class="progress-list" aria-label="Simulated response stages"><li id="progress-new" class="active">Alert received</li><li id="progress-acknowledged">Admin reviewing</li><li id="progress-staff">Contact accepted</li><li id="progress-medical">Dispatch</li><li id="progress-en-route">En route</li><li id="progress-arrived">Arrived</li><li id="progress-resolved">Resolved</li></ol>
         <div class="request-columns">
           <form id="details-form" class="details-card">
             <h3>Help responders find you</h3><p class="muted">Optional. Your request is already in the queue.</p>
@@ -80,7 +80,7 @@
     </section>
 
     <section id="admin-view" class="page-shell workspace hidden" aria-labelledby="admin-title">
-      <div class="workspace-title"><div><p class="eyebrow">OPERATIONS CONSOLE</p><h1 id="admin-title">Medical response queue</h1><p>Review requests and coordinate the response.</p></div><span id="operations-pill" class="ops-pill">Simulation active</span><button id="reset-demo" class="button button-soft" type="button">Clear practice alerts</button></div>
+      <div class="workspace-title"><div><p class="eyebrow">OPERATIONS CONSOLE</p><h1 id="admin-title">Medical response queue</h1><p>Review requests and coordinate the response.</p></div><button id="reset-demo" class="button button-soft" type="button">Clear practice alerts</button></div>
       <div id="operations-warning" class="ops-warning hidden" role="alert"></div>
       <nav class="workspace-nav" aria-label="Dashboard sections"><a href="#queue-title">Alert queue</a><a href="#directory-title">Staff directory</a><a href="#presentation-tools">Presentation tools</a></nav>
       <div id="dashboard-overview" class="overview-grid" aria-label="Demo alert overview"></div>

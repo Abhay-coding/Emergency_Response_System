@@ -22,3 +22,4 @@
 .request-panel{max-width:960px;margin-left:auto;margin-right:auto}
 .presentation-panel { padding: 1rem; margin-bottom: 1.25rem; }
 .presentation-panel summary { cursor: pointer; font-weight: 700; }
+.notice-bar { position: sticky; top: 0; z-index: 20; }
