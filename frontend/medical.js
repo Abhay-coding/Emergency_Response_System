@@ -7,6 +7,12 @@ try { state.active = JSON.parse(sessionStorage.getItem('medical_active') || 'nul
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function friendly(value) { return String(value || '').replaceAll('_',' ').replace(/\b\w/g, c => c.toUpperCase()); }
 function placeName(id) { return state.places.find(p => p.id === id)?.name || 'Location not confirmed'; }
+function queueLocation(alert) {
+  if(alert.place_id)return placeName(alert.place_id);
+  if(alert.latitude!=null && alert.longitude!=null)return 'GPS location shared';
+  if(alert.location_text)return 'Manual location shared';
+  return 'Location not provided';
+}
 function phoneHref(value) { return String(value || '').startsWith('DEMO-') ? '#' : 'tel:' + String(value || '').replace(/[^+\d]/g, ''); }
 function renderLocationMap(container,lat,lon) {
   if(lat==null||lon==null){container.replaceChildren();return;}
@@ -114,13 +120,20 @@ async function refreshStudent() {
 function requestDeviceLocation() {
   if (!state.active) return;
   if (!navigator.geolocation || !window.isSecureContext) { const message='Device location needs HTTPS or localhost and a supported browser. Enter your campus location manually.';$('location-feedback').textContent=message;toast(message,true); return; }
-  const button=$('share-location'); setBusy(button,true,'Finding location…');
+  const button=$('share-location'); if(button.disabled)return;
+  const alertId=state.active.id, headers=activeHeaders(); setBusy(button,true,'Finding location…');
   $('location-feedback').textContent='Requesting device location. You can enter a location manually while you wait.';
-  navigator.geolocation.getCurrentPosition(async (pos)=>{
-    try { await api(`/medical-alerts/${state.active.id}/location`,{method:'PATCH',headers:activeHeaders(),json:{latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy_m:pos.coords.accuracy}}); $('location-feedback').textContent='Device location saved to this demo alert.';toast('Device location saved to this demo alert.'); await refreshStudent(); }
+  const locate=(attempt)=>navigator.geolocation.getCurrentPosition(async (pos)=>{
+    if(state.active?.id!==alertId){setBusy(button,false);return;}
+    try { await api(`/medical-alerts/${alertId}/location`,{method:'PATCH',headers,json:{latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy_m:pos.coords.accuracy}}); $('location-feedback').textContent='Device location saved to this demo alert.';toast('Device location saved to this demo alert.'); await refreshStudent(); }
     catch(e) { $('location-feedback').textContent='Location could not be saved. Enter your campus location manually.';toast($('location-feedback').textContent,true); }
     finally { setBusy(button,false); }
-  },(error)=>{ setBusy(button,false);const reason=error.code===1?'Location permission denied':error.code===3?'Location request timed out':'Device location unavailable';$('location-feedback').textContent=`${reason}. Please enter your campus location manually.`;toast($('location-feedback').textContent,true); }, {enableHighAccuracy:false,timeout:6000,maximumAge:30000});
+  },(error)=>{
+    if(state.active?.id!==alertId){setBusy(button,false);return;}
+    if(attempt===0 && (error.code===2 || error.code===3)){$('location-feedback').textContent='Still finding your location; retrying once. You can enter it manually.';locate(1);return;}
+    setBusy(button,false);const reason=error.code===1?'Location permission denied':error.code===3?'Location request timed out':'Device location unavailable';$('location-feedback').textContent=`${reason}. Please enter your campus location manually.`;toast($('location-feedback').textContent,true);
+  }, {enableHighAccuracy:false,timeout:20000,maximumAge:30000});
+  locate(0);
 }
 
 async function saveDetails(e) {
@@ -171,8 +184,8 @@ function renderQueue(force=false) {
   const dispatched=['medical_dispatched','en_route','arrived'];
   const cards=[['New alerts',state.alerts.filter(a=>a.status==='new').length],['Active emergencies',open.length],['Awaiting verification',open.filter(a=>a.verification!=='confirmed_need').length],['Demo teams dispatched',open.filter(a=>dispatched.includes(a.status)).length],['Resolved cases',state.alerts.filter(a=>a.status==='resolved').length]];
   $('dashboard-overview').innerHTML=cards.map(([label,count])=>`<div class="overview-card"><span>${label}</span><strong>${count}</strong></div>`).join('');
-  const shown=state.alerts.filter(a=>{const closed=['resolved','closed_false_report'].includes(a.status);if(filter==='open'&&closed||filter==='closed'&&!closed||filter==='unverified'&&(closed||a.verification==='confirmed_need')||filter==='dispatched'&&!dispatched.includes(a.status))return false;return `${a.id} ${placeName(a.place_id)} ${a.location_text||''} ${a.status}`.toLowerCase().includes(query);});
-  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>Demo alert #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(placeName(a.place_id))}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||a.latitude!=null?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
+  const shown=state.alerts.filter(a=>{const closed=['resolved','closed_false_report'].includes(a.status);if(filter==='open'&&closed||filter==='closed'&&!closed||filter==='unverified'&&(closed||a.verification==='confirmed_need')||filter==='dispatched'&&!dispatched.includes(a.status))return false;return `${a.id} ${queueLocation(a)} ${a.location_text||''} ${a.status}`.toLowerCase().includes(query);});
+  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>Demo alert #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(queueLocation(a))}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||(a.latitude!=null&&a.longitude!=null)?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
   $('admin-queue').querySelectorAll('[data-alert-id]').forEach(button=>button.addEventListener('click',()=>selectAlert(Number(button.dataset.alertId))));
 }
 
