@@ -85,6 +85,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self' https://cdn.jsdelivr.net; "
                 "connect-src 'self'"
             )
+        elif request.url.path == "/sw.js":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; connect-src 'self'"
+            )
         elif request.url.path in {"/", "/index.html"}:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
@@ -261,6 +265,17 @@ if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 
+@app.get("/sw.js", include_in_schema=False)
+async def frontend_worker():
+    return FileResponse(frontend_dir / "sw.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/manifest.json", include_in_schema=False)
+async def frontend_manifest():
+    return FileResponse(frontend_dir / "manifest.json", media_type="application/manifest+json")
+
+
 @app.get("/style.css", include_in_schema=False)
 async def frontend_stylesheet():
     return FileResponse(frontend_dir / "style.css", media_type="text/css")
@@ -295,12 +310,7 @@ async def health(request: Request):
     db_healthy = False
     db_error = None
     try:
-        if settings.data_api_enabled:
-            from app.data_api_repository import get_repo
-            get_repo().query("SELECT 1")
-        else:
-            with get_db_context() as db:
-                db.execute(text("SELECT 1"))
+        check_database()
         db_healthy = True
     except Exception as e:
         db_error = str(e)
@@ -366,17 +376,25 @@ async def metrics():
 
 
 # Readiness probe endpoint (for Kubernetes/ECS)
+def check_database() -> None:
+    if settings.dynamo_demo_enabled or settings.data_api_enabled:
+        from app.data_api_repository import get_repo
+        repository = get_repo()
+        if settings.dynamo_demo_enabled:
+            repository.table.get_item(Key={"pk": "DEMO#PLACE", "sk": "001"})
+        else:
+            repository.query("SELECT 1")
+        return
+    with get_db_context() as db:
+        db.execute(text("SELECT 1"))
+
+
 @app.get("/ready", tags=["System"])
 @limiter.limit("60/minute")
 async def readiness(request: Request):
     """Readiness probe - checks if app is ready to serve traffic"""
     try:
-        if settings.data_api_enabled:
-            from app.data_api_repository import get_repo
-            get_repo().query("SELECT 1")
-        else:
-            with get_db_context() as db:
-                db.execute(text("SELECT 1"))
+        check_database()
         return {"status": "ready"}
     except Exception as e:
         return JSONResponse(

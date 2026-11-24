@@ -1,4 +1,8 @@
 # VPC Module for Campus Medical Assistance
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
 # Creates VPC with public, private, and database subnets across multiple AZs
 
 # ============================================================
@@ -194,7 +198,7 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id        = aws_vpc.main.id
   service_name  = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids = [aws_route_table.public.id, aws_route_table.database.id] + aws_route_table.private[*].id
+  route_table_ids = concat([aws_route_table.public.id, aws_route_table.database.id], aws_route_table.private[*].id)
 }
 
 resource "aws_vpc_endpoint" "ecr_api" {
@@ -286,8 +290,8 @@ resource "aws_security_group" "vpc_endpoints" {
 
 resource "aws_flow_log" "main" {
   count                  = var.enable_flow_logs ? 1 : 0
-  iam_role_arn           = aws_iam_role.flow_logs.arn
-  log_destination        = aws_cloudwatch_log_group.flow_logs.arn
+  iam_role_arn           = aws_iam_role.flow_logs[count.index].arn
+  log_destination        = aws_cloudwatch_log_group.flow_logs[count.index].arn
   traffic_type           = "ALL"
   vpc_id                 = aws_vpc.main.id
   max_aggregation_interval = 600
@@ -334,48 +338,4 @@ resource "aws_iam_role_policy" "flow_logs" {
       Resource = "*"
     }]
   })
-}
-
-# ============================================================
-# OUTPUTS
-# ============================================================
-
-output "vpc_id" {
-  value       = aws_vpc.main.id
-  description = "VPC ID"
-}
-
-output "vpc_cidr" {
-  value       = aws_vpc.main.cidr_block
-  description = "VPC CIDR block"
-}
-
-output "public_subnet_ids" {
-  value       = aws_subnet.public[*].id
-  description = "Public subnet IDs"
-}
-
-output "private_subnet_ids" {
-  value       = aws_subnet.private[*].id
-  description = "Private subnet IDs"
-}
-
-output "database_subnet_ids" {
-  value       = aws_subnet.database[*].id
-  description = "Database subnet IDs"
-}
-
-output "availability_zones" {
-  value       = data.aws_availability_zones.available.names
-  description = "Availability zones used"
-}
-
-output "nat_gateway_ids" {
-  value       = aws_nat_gateway.main[*].id
-  description = "NAT Gateway IDs"
-}
-
-output "db_subnet_group_name" {
-  value       = aws_db_subnet_group.main.name
-  description = "Database subnet group name"
 }

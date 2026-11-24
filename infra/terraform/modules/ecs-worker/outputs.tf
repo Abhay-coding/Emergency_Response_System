@@ -6,7 +6,7 @@ output "service_name" {
 }
 
 output "service_arn" {
-  value       = aws_ecs_service.worker.arn
+  value       = aws_ecs_service.worker.id
   description = "ECS Worker Service ARN"
 }
 

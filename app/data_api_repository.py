@@ -65,11 +65,18 @@ class DataAPIRepository:
         return self.query("SELECT action, note, actor_id, created_at FROM alert_events WHERE alert_id = :id ORDER BY id", [{"name":"id","value":{"longValue":alert_id}}])
 
     def alert(self, alert_id: int) -> dict[str, Any] | None:
-        rows = self.query("SELECT id, source, status, verification, place_id, location_text, claimed_by, version, guest_token_hash, guest_token_expires_at, created_at FROM medical_alerts WHERE id = :id", [{"name":"id","value":{"longValue":alert_id}}])
+        rows = self.query("SELECT id, source, status, verification, place_id, location_text, claimed_by, version, guest_token_hash, guest_token_expires_at, created_at, reporter_id FROM medical_alerts WHERE id = :id", [{"name":"id","value":{"longValue":alert_id}}])
         return rows[0] if rows else None
 
     def queue(self) -> list[dict[str, Any]]:
-        return self.query("SELECT id, source, status, verification, place_id, location_text, claimed_by, version, created_at FROM medical_alerts ORDER BY created_at DESC LIMIT 100")
+        columns = "id, source, status, verification, place_id, location_text, claimed_by, version, created_at"
+        active = self.query(f"SELECT {columns} FROM medical_alerts WHERE closed_at IS NULL AND status NOT IN ('resolved', 'closed_false_report') ORDER BY created_at DESC, id DESC")
+        closed = self.query(f"SELECT {columns} FROM medical_alerts WHERE closed_at IS NOT NULL OR status IN ('resolved', 'closed_false_report') ORDER BY created_at DESC, id DESC LIMIT 100")
+        return active + closed
+
+    def reporter_alerts(self, reporter_id: int) -> list[dict[str, Any]]:
+        return self.query("SELECT id, source, status, place_id, created_at FROM medical_alerts WHERE reporter_id = :id ORDER BY created_at DESC, id DESC",
+                          [{"name": "id", "value": {"longValue": reporter_id}}])
 
     def create_alert(self, *, idempotency_key: str, source: str, guest_token_hash: str) -> int:
         tx = self.begin_transaction()

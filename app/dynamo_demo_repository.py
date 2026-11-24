@@ -101,8 +101,20 @@ class DynamoDemoRepository:
             if not page.get("LastEvaluatedKey"): return items
             params["ExclusiveStartKey"]=page["LastEvaluatedKey"]
     def queue(self):
-        rows=sorted((x for x in self._all(ConsistentRead=True) if x.get("sk")=="META" and x.get("pk","").startswith("DEMO#ALERT#")), key=lambda x:x["created_at"], reverse=True)[:100]
+        rows = self._alert_rows()
+        closed = {"resolved", "closed_false_report"}
+        active = [row for row in rows if row.get("status") not in closed]
+        recent_closed = [row for row in rows if row.get("status") in closed][:100]
+        rows = active + recent_closed
         return [self.alert(row["id"]) or row for row in rows]
+
+    def _alert_rows(self):
+        return sorted((row for row in self._all(ConsistentRead=True)
+                       if row.get("sk") == "META" and row.get("pk", "").startswith("DEMO#ALERT#")),
+                      key=lambda row: (row["created_at"], row["id"]), reverse=True)
+
+    def reporter_alerts(self, reporter_id):
+        return [row for row in self._alert_rows() if row.get("reporter_id") == reporter_id]
 
     def _next_id(self) -> int:
         return int(self.table.update_item(Key={"pk":"COUNTER","sk":"ALERT"}, UpdateExpression="ADD #n :one", ExpressionAttributeNames={"#n":"next"}, ExpressionAttributeValues={":one":1}, ReturnValues="UPDATED_NEW")["Attributes"]["next"])
@@ -177,10 +189,16 @@ class DynamoDemoRepository:
         return self.alert(alert_id)
 
     def escalate_alert(self, alert_id: int):
-        alert=self.alert(alert_id)
-        if not alert: return None
-        self._event(alert_id, "student_escalated", note="Student requested urgent follow-up")
-        return alert
+        request = {
+            "Key": {"pk": self._pk(alert_id), "sk": "META"},
+            "UpdateExpression": "SET urgent_follow_up = :yes, updated_at = :now",
+            "ConditionExpression": "attribute_exists(pk) AND #status <> :resolved AND #status <> :false_report",
+            "ExpressionAttributeNames": {"#status": "status"},
+            "ExpressionAttributeValues": {":yes": True, ":now": self._now(), ":resolved": "resolved",
+                                          ":false_report": "closed_false_report"},
+        }
+        return self._update_with_event(alert_id, request, "student_escalated", None,
+                                       "Student requested urgent follow-up")
 
     def create_contact(self, name: str, kind: str, phone: str | None, shift: str) -> dict:
         contact_id=int(self.table.update_item(Key={"pk":"COUNTER","sk":"CONTACT"},UpdateExpression="ADD #n :one",ExpressionAttributeNames={"#n":"next"},ExpressionAttributeValues={":one":1},ReturnValues="UPDATED_NEW")["Attributes"]["next"]) + 100

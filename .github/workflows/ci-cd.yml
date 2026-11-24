@@ -30,14 +30,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run focused API tests
-        run: python -m pytest tests/test_data_api.py tests/test_data_api_router.py tests/test_cors.py -q
+      - name: Run API tests
+        run: python -m pytest tests -q
 
       - name: Check Python modules compile
         run: python -m py_compile app/dynamo_demo_repository.py app/routers/data_api_demo.py
 
-      - name: Check frontend JavaScript parses
-        run: node --check frontend/medical.js
+      - name: Check frontend JavaScript and configuration
+        run: |
+          for script in frontend/*.js; do node --check "$script" || exit; done
+          node --test tests/test_frontend_config.js
 
       - name: Check Lambda container builds
         run: docker build -f Dockerfile.lambda -t campus-medical-demo:ci .

@@ -45,32 +45,32 @@ resource "aws_elasticache_parameter_group" "main" {
 # ============================================================
 
 resource "aws_elasticache_replication_group" "main" {
-  replication_group_id          = "${var.project_name}-${var.environment}-redis"
-  description                   = "Redis cluster for ${var.project_name}"
-  engine                        = "redis"
-  engine_version                = var.engine_version
-  node_type                     = var.node_type
-  number_cache_clusters         = var.num_cache_nodes
-  parameter_group_name          = aws_elasticache_parameter_group.main.name
-  subnet_group_name             = aws_elasticache_subnet_group.main.name
-  security_group_ids            = var.security_group_ids
-  port                          = 6379
-  automatic_failover_enabled    = var.num_cache_nodes > 1
-  multi_az_enabled              = var.num_cache_nodes > 1
-  at_rest_encryption_enabled    = var.at_rest_encryption
-  transit_encryption_enabled    = var.transit_encryption
-  auth_token                    = var.auth_token != "" ? var.auth_token : random_password.auth_token.result
-  snapshot_retention_limit      = 7
-  snapshot_window               = "03:00-04:00"
-  maintenance_window            = "mon:04:00-mon:05:00"
+  replication_group_id       = "${var.project_name}-${var.environment}-redis"
+  description                = "Redis cluster for ${var.project_name}"
+  engine                     = "redis"
+  engine_version             = var.engine_version
+  node_type                  = var.node_type
+  num_cache_clusters         = var.num_cache_nodes
+  parameter_group_name       = aws_elasticache_parameter_group.main.name
+  subnet_group_name          = aws_elasticache_subnet_group.main.name
+  security_group_ids         = var.security_group_ids
+  port                       = 6379
+  automatic_failover_enabled = var.num_cache_nodes > 1
+  multi_az_enabled           = var.num_cache_nodes > 1
+  at_rest_encryption_enabled = var.at_rest_encryption
+  transit_encryption_enabled = var.transit_encryption
+  auth_token                 = var.auth_token != "" ? var.auth_token : random_password.auth_token.result
+  snapshot_retention_limit   = 7
+  snapshot_window            = "03:00-04:00"
+  maintenance_window         = "mon:04:00-mon:05:00"
   log_delivery_configuration {
-    destination      = aws_cloudwatch_log_group.redis.arn
+    destination      = aws_cloudwatch_log_group.redis.name
     destination_type = "cloudwatch-logs"
     log_format       = "json"
     log_type         = "slow-log"
   }
   log_delivery_configuration {
-    destination      = aws_cloudwatch_log_group.redis.arn
+    destination      = aws_cloudwatch_log_group.redis.name
     destination_type = "cloudwatch-logs"
     log_format       = "json"
     log_type         = "engine-log"
@@ -128,4 +128,7 @@ output "auth_token" {
   value       = var.auth_token != "" ? var.auth_token : random_password.auth_token.result
   description = "Redis auth token"
   sensitive   = true
+}
+output "replication_group_arn" {
+  value = aws_elasticache_replication_group.main.arn
 }

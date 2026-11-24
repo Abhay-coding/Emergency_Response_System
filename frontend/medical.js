@@ -1,7 +1,7 @@
 /* Campus Medical Assistance — medical incidents only. */
 const $ = (id) => document.getElementById(id);
 const state = { token: localStorage.getItem('cer_token'), user: null, active: null,
-  places: [], contacts: [], alerts: [], selected: null, selectedSnapshot: null, queueSnapshot: null, contactsSnapshot: null, staffSnapshot: null, authMode: 'login', timer: null, actionDrafts: {}, detailTab: 'overview', autoDemoRunning: false };
+  places: [], contacts: [], alerts: [], selected: null, selectedSnapshot: null, queueSnapshot: null, contactsSnapshot: null, staffSnapshot: null, authMode: 'login', timer: null, actionDrafts: {}, detailTab: 'overview', autoDemoRunning: false, installPrompt: null, isOnline: navigator.onLine };
 try { state.active = JSON.parse(sessionStorage.getItem('medical_active') || 'null'); } catch { state.active = null; }
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -45,15 +45,23 @@ function showView() {
   const role=state.user?.role;
   $('student-view').classList.toggle('hidden',role==='admin');
   $('admin-view').classList.toggle('hidden',role!=='admin');
+  $('staff-inbox').classList.toggle('hidden',role!=='responder');
+  if (role==='responder') $('student-view').classList.add('hidden');
+  $('my-alerts').classList.toggle('hidden',role!=='reporter');
   $('account-label').textContent=state.user ? `${state.user.name} · ${friendly(role)}` : 'Guest access';
   $('login-open').classList.toggle('hidden',!!state.user);
   $('logout').classList.toggle('hidden',!state.user);
   if (state.demoReady && role==='admin') refreshAdmin();
-  else if (state.demoReady && state.active) refreshStudent();
+  else if (state.demoReady && role==='responder') refreshStaff();
+  else if (state.demoReady && state.user) {
+    if (state.active) refreshStudent();
+    if (role==='reporter') loadMyAlerts();
+  }
 }
 
 async function startAlert(source) {
-  if(!state.demoReady){toast('Demo service is unavailable or not safely configured. For a real emergency, call emergency services directly.',true);return;}
+  if(!state.demoReady && !canQueueGuestAlert()){toast('The service is unavailable. For a real emergency, call campus emergency services directly.',true);return;}
+  if (state.pending) { toast('This demo alert is still on this device and has not reached the admin.'); return; }
   if (state.active && !['resolved','closed_false_report'].includes(state.active.status || 'new')) {
     try { await api(`/medical-alerts/${state.active.id}/escalate`,{method:'POST',headers:activeHeaders()}); toast('Urgent follow-up was recorded for the admin.'); }
     catch(e) { if(e.status===404){state.active=null;sessionStorage.removeItem('medical_active');$('request-panel').classList.add('hidden');toast('That demo was reset. Press the button again to start a new demo.');}else toast(userMessage(e),true); }
@@ -63,10 +71,14 @@ async function startAlert(source) {
   const button=source==='self' ? $('help-button') : $('bystander-button');
   const key=sessionStorage.getItem('medical_pending_key') || crypto.randomUUID();
   sessionStorage.setItem('medical_pending_key',key);
+  const apiUrl = alertApiUrl();
+  if (state.submittingAlert || state.syncingAlert) return;
+  state.submittingAlert = true;
   setBusy(button,true,'Sending alert…');
   try {
     const result=await api('/medical-alerts',{method:'POST',headers:{'Idempotency-Key':key},json:{source}});
     saveActive(result,key); sessionStorage.removeItem('medical_pending_key');
+    if (state.user?.role === 'reporter') loadMyAlerts();
     $('request-panel').classList.remove('hidden');
     renderStudentStatus(result);
     $('request-panel').scrollIntoView({behavior:'smooth',block:'start'});
@@ -74,8 +86,17 @@ async function startAlert(source) {
     requestDeviceLocation();
   } catch(e) {
     if(e.status===410) sessionStorage.removeItem('medical_pending_key');
+    if (e instanceof TypeError && canQueueGuestAlert()) {
+      try {
+        await window.OfflineStorage.storeAlert({idempotencyKey:key, apiUrl, body:{source}, status:'pending_sync'});
+        state.pending=key;
+        renderPendingAlert();
+        scheduleAlertSync();
+        return;
+      } catch (storageError) { console.warn('Could not save the offline alert:', storageError); }
+    }
     toast(userMessage(e),true);
-  } finally { setBusy(button,false); }
+  } finally { state.submittingAlert=false; setBusy(button,false); updateOnlineStatus(); }
 }
 
 function renderStudentStatus(alert) {
@@ -88,28 +109,142 @@ function renderStudentStatus(alert) {
     $('location-text').value=alert.location_text||'';$('callback-phone').value=alert.callback_phone||'';$('details').value=alert.details||'';
     state.detailsLoadedFor=alert.id;
   }
-  const labels={new:'Your alert has reached the demo admin queue.',acknowledged:'An admin is reviewing your demo request.',checking:'An admin is checking the details.',contact_pending:'A demo contact attempt is pending. No real call or message was sent.',staff_alerted:'A demo contact accepted. No one was contacted.',medical_dispatched:'Medical Team Dispatched — DEMO. No real team was dispatched.',en_route:'Team en route — DEMO. No real team is travelling.',arrived:'Team arrived — DEMO. No real team has arrived.',resolved:'This demo request has been marked resolved.',closed_false_report:'This request was closed after admin review.'};
+  const labels=state.simulation?{new:'Your alert has reached the demo admin queue.',acknowledged:'An admin is reviewing your demo request.',checking:'An admin is checking the details.',contact_pending:'A demo contact attempt is pending. No real call or message was sent.',staff_alerted:'A demo contact accepted. No one was contacted.',medical_dispatched:'Medical Team Dispatched — DEMO. No real team was dispatched.',en_route:'Team en route — DEMO. No real team is travelling.',arrived:'Team arrived — DEMO. No real team has arrived.',resolved:'This demo request has been marked resolved.',closed_false_report:'This request was closed after admin review.'}:{new:'Your alert reached the campus queue.',acknowledged:'An admin is reviewing your request.',checking:'An admin is checking the details.',staff_alerted:'The admin recorded a staff assignment.',medical_dispatched:'The admin recorded a dispatch.',resolved:'The admin marked this request resolved.',closed_false_report:'This request was closed after admin review.'};
   const banner=$('request-state'); banner.textContent=labels[alert.status]||friendly(alert.status); banner.classList.toggle('error',alert.status==='closed_false_report');
   $('status-updated').textContent=alert.updated_at?`Last updated: ${new Date(alert.updated_at).toLocaleString()}`:'';
   $('demo-team').textContent=alert.demo_team?`Fictional demo team: ${alert.demo_team}. No real responder has been contacted.`:'';$('demo-team').classList.toggle('hidden',!alert.demo_team);
   $('location-state').textContent=alert.latitude!=null&&alert.longitude!=null?`Device location saved: ${Number(alert.latitude).toFixed(5)}, ${Number(alert.longitude).toFixed(5)}. Add a room or landmark if possible.`:alert.place_id||alert.location_text?'Manual location saved with this demo alert.':'Location not yet shared. Choose your campus location below.';
   const mapKey=`${alert.latitude},${alert.longitude}`;if($('student-map').dataset.location!==mapKey){$('student-map').dataset.location=mapKey;renderLocationMap($('student-map'),alert.latitude,alert.longitude);}
   const stage={new:'new',acknowledged:'acknowledged',checking:'acknowledged',contact_pending:'acknowledged',staff_alerted:'staff',medical_dispatched:'medical',en_route:'en-route',arrived:'arrived',resolved:'resolved'}[alert.status];
-  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:'Demo contact accepted',medical:'Demo dispatch','en-route':'Demo en route',arrived:'Demo arrived',resolved:'Resolved'};
+  const labelsByStage={new:'Alert received',acknowledged:'Admin reviewing',staff:state.managedDemo?'Demo contact accepted':'Staff assignment recorded',medical:state.simulation?'Demo dispatch':'Dispatch recorded','en-route':'Demo en route',arrived:'Demo arrived',resolved:'Resolved'};
   ['new','acknowledged','staff','medical','en-route','arrived','resolved'].forEach(part=>{const el=$('progress-'+part),event=(alert.history||[]).find(entry=>entry.stage===part);el.classList.toggle('active',part===stage);el.classList.toggle('completed',!!event&&part!==stage);el.textContent=labelsByStage[part];if(event?.created_at){const time=document.createElement('small');time.textContent=new Date(event.created_at).toLocaleString();el.append(time);}if(part===stage)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
 }
 
 async function refreshStudent() {
   if (!state.active) return;
+  const active = state.active;
   try {
     const alert=await api(`/medical-alerts/${state.active.id}/public`,{headers:activeHeaders()});
+    if (state.active !== active) return;
     renderStudentStatus(alert);
-    if (window.CER_CONFIG?.FEATURES?.ENABLE_MESSAGES) {
+    if (!state.managedDemo) {
       const messages=await api(`/medical-alerts/${state.active.id}/messages`,{headers:activeHeaders()});
       renderMessages('student-messages',messages);
     }
-  } catch(e) { if(e.status===404){state.active=null;sessionStorage.removeItem('medical_active');$('request-panel').classList.add('hidden');toast('This demo alert was cleared. You can start a new demo.');return;} $('request-state').textContent=`Could not refresh request: ${e.message}`; $('request-state').classList.add('error'); }
+  } catch(e) { if (state.active !== active) return; if(e.status===404){state.active=null;sessionStorage.removeItem('medical_active');$('request-panel').classList.add('hidden');toast('This demo alert was cleared. You can start a new demo.');return;} $('request-state').textContent=`Could not refresh request: ${e.message}`; $('request-state').classList.add('error'); }
 }
+
+
+// The dashboard and the reporter both refresh through the existing polling loop.
+async function loadMyAlerts() {
+  if (!state.user) return;
+  try {
+    const data = await api('/medical-alerts/history');
+    state.history = data.items || [];
+    renderMyAlertsList();
+  } catch (e) {
+    console.warn('Failed to load alert history:', e);
+    $('my-alerts-list').innerHTML = '<div class="empty-list error">Failed to load alerts.</div>';
+  }
+}
+
+function renderMyAlertsList() {
+  const container = $('my-alerts-list');
+  if (!state.history?.length) {
+    container.innerHTML = '<div class="empty-list">No alerts yet. Your first alert will appear here.</div>';
+    return;
+  }
+
+  container.innerHTML = state.history.map(alert => `
+    <article class="alert-history-item" data-alert-id="${alert.id}">
+      <div class="alert-history-header">
+        <span class="alert-history-id">#${alert.id}</span>
+        <span class="status-tag ${escapeHtml(alert.status)}">${friendly(alert.status)}</span>
+      </div>
+      <div class="alert-history-meta">
+        <span>${friendly(alert.source)}</span>
+        <span>${escapeHtml(placeName(alert.place_id))}</span>
+        <span>${alert.created_at ? new Date(alert.created_at).toLocaleString() : ''}</span>
+      </div>
+    </article>
+  `).join('');
+
+  // Add click handlers
+  container.querySelectorAll('.alert-history-item').forEach(item => {
+    item.addEventListener('click', () => openAlertDetail(Number(item.dataset.alertId)));
+  });
+}
+
+function openAlertDetail(alertId) {
+  const dialog = $('alert-detail-dialog');
+  const content = $('alert-detail-content');
+
+  // Show loading state
+  content.innerHTML = '<div class="alert-detail-loading">Loading alert details...</div>';
+  dialog.showModal();
+
+  // Fetch and render alert details
+  api(`/medical-alerts/${alertId}/detail`)
+    .then(data => {
+      const alert = data;
+      content.innerHTML = `
+        <div class="alert-detail-header">
+          <span class="alert-detail-id">#${alert.id}</span>
+          <span class="status-tag ${escapeHtml(alert.status)}">${friendly(alert.status)}</span>
+        </div>
+        <dl class="alert-detail-facts">
+          <div><dt>Source</dt><dd>${friendly(alert.source)}</dd></div>
+          <div><dt>Status</dt><dd>${friendly(alert.status)}</dd></div>
+          <div><dt>Identity Verified</dt><dd>${alert.identity_verified ? 'Yes' : 'No'}</dd></div>
+          <div><dt>Campus Place</dt><dd>${escapeHtml(placeName(alert.place_id))}</dd></div>
+          <div><dt>Room / Landmark</dt><dd>${escapeHtml(alert.location_text || 'Not provided')}</dd></div>
+          <div><dt>Reporter</dt><dd>${alert.identity_verified ? 'Signed-in student' : 'Guest · identity unverified'}</dd></div>
+          <div><dt>Callback</dt><dd>${alert.callback_phone ? escapeHtml(alert.callback_phone) : 'Not provided'}</dd></div>
+          <div><dt>Verification</dt><dd>${friendly(alert.verification)}</dd></div>
+          <div><dt>Admin Claim</dt><dd>${alert.claimed_by ? 'Claimed' : 'Unclaimed'}</dd></div>
+          <div><dt>Created</dt><dd>${alert.created_at ? new Date(alert.created_at).toLocaleString() : 'N/A'}</dd></div>
+          <div><dt>Acknowledged</dt><dd>${alert.acknowledged_at ? new Date(alert.acknowledged_at).toLocaleString() : 'Not yet'}</dd></div>
+          ${alert.details ? `<div class="alert-detail-section"><h4>Details</h4><p>${escapeHtml(alert.details)}</p></div>` : ''}
+          ${alert.latitude !== null && alert.longitude !== null ? `
+            <div class="alert-detail-section">
+              <h4>Location</h4>
+              <p class="muted">Device position: ${Number(alert.latitude).toFixed(5)}, ${Number(alert.longitude).toFixed(5)} ${alert.accuracy_m ? `· accuracy ~${Math.round(alert.accuracy_m)} m` : ''}</p>
+              <a class="button button-soft" href="https://www.openstreetmap.org/?mlat=${encodeURIComponent(alert.latitude)}&mlon=${encodeURIComponent(alert.longitude)}#map=18/${encodeURIComponent(alert.latitude)}/${encodeURIComponent(alert.longitude)}" target="_blank" rel="noopener noreferrer">Open on map</a>
+            </div>
+          ` : ''}
+        `;
+    })
+    .catch(e => {
+      content.textContent = `Failed to load alert details: ${e.message}`;
+    });
+}
+
+function closeAlertDetail() {
+  $('alert-detail-dialog').close();
+}
+
+// Close dialog when clicking outside
+document.addEventListener('click', (e) => {
+  const dialog = $('alert-detail-dialog');
+  if (e.target === dialog) {
+    closeAlertDetail();
+  }
+});
+
+// Close dialog with Escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const dialog = $('alert-detail-dialog');
+    if (!dialog.hidden) closeAlertDetail();
+  }
+});
+
+// Close buttons
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'alert-detail-close') {
+    closeAlertDetail();
+  }
+});
 
 function requestDeviceLocation() {
   if (!state.active) return;
@@ -155,7 +290,196 @@ async function refreshAdmin() {
       if(current && JSON.stringify(current)!==state.selectedSnapshot) await selectAlert(state.selected);
       else await loadEvents(state.selected);
     }
+    // Load analytics dashboard
+    if (!state.managedDemo) await loadAnalyticsDashboard();
   } catch(e) { toast(`Could not load admin queue: ${e.message}`,true); }
+}
+
+
+async function loadAnalyticsDashboard() {
+  try {
+    const [responseTimes, volumeByLocation, falseReportRate, statusDistribution, responseTimeByLocation] = await Promise.all([
+      api('/medical-alerts/analytics/response-times'),
+      api('/medical-alerts/analytics/volume-by-location'),
+      api('/medical-alerts/analytics/false-report-rate'),
+      api('/medical-alerts/analytics/status-distribution'),
+      api('/medical-alerts/analytics/response-time-by-location'),
+    ]);
+
+    state.analytics = {
+      responseTimes: responseTimes || [],
+      volumeByLocation: volumeByLocation || [],
+      falseReportRate: falseReportRate || [],
+      statusDistribution: statusDistribution || [],
+      responseTimeByLocation: responseTimeByLocation || [],
+    };
+
+    renderAnalyticsDashboard();
+  } catch (e) {
+    console.warn('Failed to load analytics dashboard:', e);
+    $('analytics-dashboard').innerHTML = '<div class="empty-list error">Failed to load analytics dashboard.</div>';
+  }
+}
+
+function renderAnalyticsDashboard() {
+  const container = $('analytics-dashboard');
+  if (!state.analytics) {
+    container.innerHTML = '<div class="empty-list">No analytics data available.</div>';
+    return;
+  }
+
+  const { responseTimes, volumeByLocation, falseReportRate, statusDistribution, responseTimeByLocation } = state.analytics;
+
+  container.innerHTML = `
+    <div class="analytics-grid">
+      <!-- Response Times -->
+      <section class="analytics-card">
+        <h3>Response Times (Last 30 Days)</h3>
+        <div class="analytics-chart" id="response-times-chart">
+          ${renderResponseTimesChart()}
+        </div>
+      </section>
+
+      <!-- Volume by Location -->
+      <section class="analytics-card">
+        <h3>Alerts by Location</h3>
+        <div class="analytics-chart" id="volume-chart">
+          ${renderVolumeChart()}
+        </div>
+      </section>
+
+      <!-- False Report Rate -->
+      <section class="analytics-card">
+        <h3>False Report Rate</h3>
+        <div class="analytics-chart" id="false-report-chart">
+          ${renderFalseReportChart()}
+        </div>
+      </section>
+
+      <!-- Status Distribution -->
+      <section class="analytics-card">
+        <h3>Status Distribution</h3>
+        <div class="analytics-chart" id="status-distribution-chart">
+          ${renderStatusDistributionChart()}
+        </div>
+      </section>
+
+      <!-- Response Time by Location (Heatmap) -->
+      <section class="analytics-card full-width">
+        <h3>Response Time by Location (Heatmap)</h3>
+        <div class="analytics-chart" id="heatmap-chart">
+          ${renderHeatmapChart()}
+        </div>
+      </section>
+    `;
+}
+
+function renderResponseTimesChart() {
+  const data = state.analytics?.responseTimes || [];
+  if (!data.length) return '<p class="muted">No response time data available.</p>';
+
+  return `
+    <table class="analytics-table">
+      <thead>
+        <tr><th>Date</th><th>Alerts</th><th>Avg (min)</th><th>Median (min)</th><th>P95 (min)</th></tr>
+      </thead>
+      <tbody>
+        ${data.map(d => `
+          <tr>
+            <td>${d.date}</td>
+            <td>${d.count}</td>
+            <td>${d.avg_minutes}</td>
+            <td>${d.p50_minutes}</td>
+            <td>${d.p95_minutes}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderVolumeChart() {
+  const data = state.analytics?.volumeByLocation || [];
+  if (!data.length) return '<p class="muted">No volume data available.</p>';
+
+  const maxCount = Math.max(...data.map(d => d.count), 1);
+
+  return `
+    <div class="volume-bars">
+      ${data.map(d => `
+        <div class="volume-bar-item">
+          <div class="volume-bar-label">${escapeHtml(d.place_name)}</div>
+          <div class="volume-bar-container">
+            <div class="volume-bar-fill" style="width: ${(d.count / maxCount) * 100}%"></div>
+            <span class="volume-bar-value">${d.count}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderFalseReportChart() {
+  const data = state.analytics?.falseReportRate || [];
+  if (!data.length) return '<p class="muted">No false report data available.</p>';
+
+  return `
+    <table class="analytics-table">
+      <thead>
+        <tr><th>Date</th><th>Total Alerts</th><th>False Reports</th><th>False Rate (%)</th></tr>
+      </thead>
+      <tbody>
+        ${data.map(d => `
+          <tr>
+            <td>${d.date}</td>
+            <td>${d.total_alerts}</td>
+            <td>${d.false_reports}</td>
+            <td>${d.false_report_rate}%</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderStatusDistributionChart() {
+  const data = state.analytics?.statusDistribution || [];
+  if (!data.length) return '<p class="muted">No status data available.</p>';
+
+  const total = data.reduce((sum, d) => sum + d.count, 0);
+
+  return `
+    <div class="status-distribution">
+      ${data.map(d => `
+        <div class="status-dist-item">
+          <span class="status-dist-label">${friendly(d.status)}</span>
+          <div class="status-dist-bar">
+            <div class="status-dist-fill" style="width: ${(d.count / Math.max(total, 1)) * 100}%"></div>
+          </div>
+          <span class="status-dist-count">${d.count} (${Math.round(d.count / Math.max(total, 1) * 100)}%)</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderHeatmapChart() {
+  const data = state.analytics?.responseTimeByLocation || [];
+  if (!data.length) return '<p class="muted">No heatmap data available.</p>';
+
+  const maxTime = Math.max(...data.filter(d => d.avg_response_time_minutes).map(d => d.avg_response_time_minutes), 1);
+
+  return `
+    <div class="heatmap-grid">
+      ${data.filter(d => d.avg_response_time_minutes).map(d => `
+        <div class="heatmap-cell" style="--intensity: ${(d.avg_response_time_minutes / maxTime)}">
+          <div class="heatmap-cell-name">${escapeHtml(d.place_name)}</div>
+          <div class="heatmap-cell-time">${d.avg_response_time_minutes.toFixed(1)} min</div>
+          <div class="heatmap-cell-count">${d.count} alerts</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 function renderOperations(ops) {
   const pill=$('operations-pill'); pill.textContent=ops.live_ready?'Live contact setup ready':'Prototype / setup needed'; pill.classList.toggle('warn',!ops.live_ready);
@@ -172,7 +496,7 @@ function renderQueue(force=false) {
   const cards=[['New alerts',state.alerts.filter(a=>a.status==='new').length],['Active emergencies',open.length],['Awaiting verification',open.filter(a=>a.verification!=='confirmed_need').length],['Demo teams dispatched',open.filter(a=>dispatched.includes(a.status)).length],['Resolved cases',state.alerts.filter(a=>a.status==='resolved').length]];
   $('dashboard-overview').innerHTML=cards.map(([label,count])=>`<div class="overview-card"><span>${label}</span><strong>${count}</strong></div>`).join('');
   const shown=state.alerts.filter(a=>{const closed=['resolved','closed_false_report'].includes(a.status);if(filter==='open'&&closed||filter==='closed'&&!closed||filter==='unverified'&&(closed||a.verification==='confirmed_need')||filter==='dispatched'&&!dispatched.includes(a.status))return false;return `${a.id} ${placeName(a.place_id)} ${a.location_text||''} ${a.status}`.toLowerCase().includes(query);});
-  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>Demo alert #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(placeName(a.place_id))}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||a.latitude!=null?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
+  $('admin-queue').innerHTML=shown.length?shown.map(a=>`<button type="button" class="queue-item ${state.selected===a.id?'selected':''}" data-alert-id="${a.id}"><span class="queue-top"><strong>${state.simulation?'Demo alert':'Alert'} #${a.id}</strong><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></span><span class="queue-meta"><span>${escapeHtml(placeName(a.place_id))}${a.urgent_follow_up?' · Urgent follow-up':''}</span><span>${a.source==='bystander'?'Bystander':'Self'} · ${a.identity_verified?'Signed in':'Guest'}</span></span><span class="queue-meta"><span>${a.place_id||a.location_text||a.latitude!=null?'Location supplied · unconfirmed':'⚠ Location missing'}</span><span>${a.created_at?escapeHtml(new Date(a.created_at).toLocaleString()):''}</span></span></button>`).join(''):'<div class="empty-list">No alerts match this view.</div>';
   $('admin-queue').querySelectorAll('[data-alert-id]').forEach(button=>button.addEventListener('click',()=>selectAlert(Number(button.dataset.alertId))));
 }
 
@@ -197,6 +521,16 @@ async function selectAlert(id) {
   if(alert.latitude!=null && alert.longitude!=null) { const map=document.createElement('a'); map.className='button button-soft'; map.target='_blank'; map.rel='noopener noreferrer'; map.href=`https://www.openstreetmap.org/?mlat=${encodeURIComponent(alert.latitude)}&mlon=${encodeURIComponent(alert.longitude)}#map=18/${encodeURIComponent(alert.latitude)}/${encodeURIComponent(alert.longitude)}`; map.textContent='Open reported location on map'; $('admin-detail').querySelector('.detail-facts').after(map); }
   if(alert.latitude!=null && alert.longitude!=null){const mapPanel=document.createElement('div');mapPanel.className='map-panel';$('admin-detail').querySelector('.detail-facts').after(mapPanel);renderLocationMap(mapPanel,alert.latitude,alert.longitude);}
   $('staff-choice').addEventListener('change',()=>{ $('staff-call').classList.add('hidden'); });
+  const responseSection=$('admin-message-form')?.closest('.detail-section');
+  if (!state.managedDemo) {
+    verificationSectionForSql(verifySection, alert, closed);
+    $('staff-send').addEventListener('click',sendStaffAlert);
+    $('staff-send').disabled=closed || !alert.claimed_by || !['acknowledged','checking','staff_alerted'].includes(alert.status);
+    $('admin-message-form')?.addEventListener('submit',sendAdminMessage);
+    organizeAlertDetails(verifySection,responseSection);
+    await Promise.all([loadEvents(id),loadAdminMessages(id),loadSuggestions(alert.place_id,id)]);
+    return;
+  }
   const method=document.createElement('select');method.id='demo-contact-method';method.setAttribute('aria-label','Simulated contact method');method.innerHTML='<option value="notification">Simulate notification</option><option value="call">Simulate call</option>'; $('staff-send').before(method);$('staff-send').textContent='Start simulation';
   $('admin-detail').querySelector('[data-action="dispatch-medical"]').textContent='Simulate medical dispatch';
   $('staff-send').addEventListener('click',sendStaffAlert);
@@ -208,7 +542,6 @@ async function selectAlert(id) {
     const next=document.createElement('button'); next.type='button'; next.className='button button-navy'; next.textContent={'medical_dispatched':'Simulate team en route','en_route':'Simulate team arrived','arrived':'Resolve demo request'}[alert.status];
     next.addEventListener('click',()=>adminAction('demo-progress')); $('staff-send').parentElement.after(next);
   }
-  const responseSection=$('admin-message-form')?.closest('.detail-section');
   if (responseSection) {
     responseSection.innerHTML='<h4>Demo staff response</h4><p class="muted">Record a fictional response for the demo. No call or message is sent.</p><div class="action-row"><button id="record-staff-ack" class="button button-soft" type="button">Simulate acknowledgement</button></div><label for="staff-findings"><strong>Demo findings</strong></label><textarea id="staff-findings" rows="2" placeholder="Enter fictional findings"></textarea><button id="record-staff-findings" class="button button-navy" type="button">Record demo findings</button>';
     $('record-staff-ack').addEventListener('click',()=>recordStaffResponse('staff-acknowledged'));
@@ -217,6 +550,13 @@ async function selectAlert(id) {
   }
   organizeAlertDetails(verifySection,responseSection);
   await Promise.all([loadEvents(id),window.CER_CONFIG?.FEATURES?.ENABLE_MESSAGES?loadAdminMessages(id):Promise.resolve(),loadSuggestions(alert.place_id,id)]);
+}
+function verificationSectionForSql(section, alert, closed) {
+  section.querySelector('label').remove();
+  $('verification-choice').remove();
+  $('verification-save').remove();
+  $('admin-detail').querySelector('[data-action="verify"]').disabled=closed;
+  $('admin-detail').querySelector('[data-action="dispatch-medical"]').disabled=closed || !alert.claimed_by;
 }
 function organizeAlertDetails(verification,responseSection){
   const body=$('admin-detail').querySelector('.detail-body'),facts=body.querySelector('.detail-facts'),actions=body.querySelector('.action-row'),staff=$('staff-choice').closest('.detail-section'),activity=$('event-list').closest('.detail-section');
@@ -241,14 +581,14 @@ async function loadSuggestions(placeId,id) { if(!placeId)return; try {const rows
 async function adminAction(action) {
   if(!state.selected)return; const alertId=state.selected; const note=$('action-note')?.value.trim()||'';
   const alert=state.alerts.find(a=>a.id===alertId); const version=alert?.version;
-  const body={note,version};
+  const body=action==='close-false'&&!state.managedDemo?{reason:note}:{note,version};
   const needsNote=!['claim','demo-progress'].includes(action)||(action==='demo-progress'&&alert?.status==='arrived');
   if(needsNote && note.length<(action==='close-false'?10:2)) {toast('Write a clear action note first.',true);$('action-note').focus();return;}
   try {await api(`/medical-alerts/${alertId}/${action}`,{method:'POST',json:action==='claim'?{version}:body});if(action!=='claim'&&action!=='demo-progress'&&state.actionDrafts[alertId]?.trim()===note)delete state.actionDrafts[alertId];toast('Action recorded.');await refreshAdmin();}
   catch(e){toast(userMessage(e),true);if(e.status===409)await refreshAdmin();}
 }
 async function saveVerification(){const alertId=state.selected,note=$('action-note').value.trim(),alert=state.alerts.find(a=>a.id===alertId);if(note.length<2){toast('Add verification notes first.',true);$('action-note').focus();return;}try{await api(`/medical-alerts/${alertId}/verification`,{method:'POST',json:{version:alert.version,verification:$('verification-choice').value,note}});if(state.actionDrafts[alertId]?.trim()===note)delete state.actionDrafts[alertId];toast('Verification saved.');await refreshAdmin();}catch(e){toast(userMessage(e),true);if(e.status===409)await refreshAdmin();}}
-async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a demo contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version,method:$('demo-contact-method').value}});toast('Demo contact attempt recorded. No message or call was sent.');refreshAdmin();}catch(e){toast(userMessage(e),true);} }
+async function sendStaffAlert() { const staffId=Number($('staff-choice').value);const version=state.alerts.find(a=>a.id===state.selected)?.version;if(!staffId){toast('Choose a demo contact.',true);return;}try{await api(`/medical-alerts/${state.selected}/staff`,{method:'POST',json:{staff_id:staffId,version,method:$('demo-contact-method')?.value}});toast(state.managedDemo ? 'Simulated contact attempt recorded.' : 'Staff assignment recorded.');refreshAdmin();}catch(e){toast(userMessage(e),true);} }
 async function runAutomaticDemo(){
   const alertId=state.selected, staffId=Number($('staff-choice').value), method=$('demo-contact-method').value;
   if(state.autoDemoRunning)return;
@@ -282,8 +622,8 @@ function renderContacts() {
   const snapshot=JSON.stringify(state.contacts);
   if(snapshot===state.contactsSnapshot)return;
   state.contactsSnapshot=snapshot;
-  $('contact-list').innerHTML=state.contacts.length?state.contacts.map(c=>`<div class="contact-item"><strong>${escapeHtml(c.name)}</strong><small>${friendly(c.kind)} · ${friendly(c.shift)} · ${c.active?'available':'unavailable'}</small><small>${escapeHtml(c.phone||'DEMO')} · fictional demo identifier</small><details><summary>Edit demo contact</summary><form class="contact-edit" data-contact-id="${c.id}"><label>Shift<select name="shift"><option value="all" ${c.shift==='all'?'selected':''}>All hours</option><option value="day" ${c.shift==='day'?'selected':''}>Day</option><option value="night" ${c.shift==='night'?'selected':''}>Night</option></select></label><label>Simulated outcome<select name="outcome"><option value="accepted" ${(!c.outcome||c.outcome==='accepted')?'selected':''}>Accepted</option><option value="no_answer" ${c.outcome==='no_answer'?'selected':''}>No answer</option><option value="unavailable" ${c.outcome==='unavailable'?'selected':''}>Unavailable</option></select></label><label class="contact-active"><input type="checkbox" name="active" ${c.active?'checked':''}> Available for simulation</label><button class="button button-navy" type="submit">Save contact</button></form></details></div>`).join(''):'<p class="muted">Add a demo contact to start a simulation.</p>';
-  $('contact-list').querySelectorAll('.contact-edit').forEach(form=>{const contact=state.contacts.find(c=>c.id===Number(form.dataset.contactId));const label=document.createElement('label');label.textContent='Response delay (seconds)';const input=document.createElement('input');input.type='number';input.name='delay_seconds';input.min='0';input.max='300';input.value=String(contact?.delay_seconds||0);label.append(input);form.querySelector('button').before(label);form.addEventListener('submit',updateContact);});
+  $('contact-list').innerHTML=state.contacts.length?state.contacts.map(c=>`<div class="contact-item"><strong>${escapeHtml(c.name)}</strong><small>${friendly(c.kind)} · ${friendly(c.shift)} · ${c.active?'available':'unavailable'}</small><small>${escapeHtml(c.phone||(state.managedDemo?'DEMO':'No phone'))}${state.managedDemo?' · fictional demo identifier':''}</small><details><summary>Edit contact</summary><form class="contact-edit" data-contact-id="${c.id}"><label>Shift<select name="shift"><option value="all" ${c.shift==='all'?'selected':''}>All hours</option><option value="day" ${c.shift==='day'?'selected':''}>Day</option><option value="night" ${c.shift==='night'?'selected':''}>Night</option></select></label><label>Simulated outcome<select name="outcome"><option value="accepted" ${(!c.outcome||c.outcome==='accepted')?'selected':''}>Accepted</option><option value="no_answer" ${c.outcome==='no_answer'?'selected':''}>No answer</option><option value="unavailable" ${c.outcome==='unavailable'?'selected':''}>Unavailable</option></select></label><label class="contact-active"><input type="checkbox" name="active" ${c.active?'checked':''}> Available</label><button class="button button-navy" type="submit">Save contact</button></form></details></div>`).join(''):'<p class="muted">Add a demo contact to start a simulation.</p>';
+  $('contact-list').querySelectorAll('.contact-edit').forEach(form=>{const contact=state.contacts.find(c=>c.id===Number(form.dataset.contactId));const label=document.createElement('label');label.textContent='Response delay (seconds)';const input=document.createElement('input');input.type='number';input.name='delay_seconds';input.min='0';input.max='300';input.value=String(contact?.delay_seconds||0);label.append(input);if (state.managedDemo) form.querySelector('button').before(label);else form.elements.outcome.closest('label').remove();form.addEventListener('submit',updateContact);});
   $('coverage-staff').innerHTML='<option value="">Choose contact</option>'+state.contacts.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
 }
 function renderContactAssignments() {
@@ -295,8 +635,8 @@ function renderContactAssignments() {
     label.textContent=assignments.length ? assignments.map(a=>`Demo #${a.id}: ${friendly(a.status)}`).join(' · ') : 'No active assignment in the displayed queue';
   });
 }
-async function createContact(e){e.preventDefault();const body={name:$('contact-name').value.trim(),kind:$('contact-kind').value,shift:$('contact-shift').value};try{await api('/campus/contacts',{method:'POST',json:body});$('contact-form').reset();toast('Demo contact added.');refreshAdmin();}catch(err){toast(userMessage(err),true);} }
-async function updateContact(e){e.preventDefault();const form=e.currentTarget;const body={shift:form.elements.shift.value,outcome:form.elements.outcome.value,delay_seconds:Number(form.elements.delay_seconds.value),active:form.elements.active.checked};try{await api(`/campus/contacts/${form.dataset.contactId}`,{method:'PATCH',json:body});toast('Demo contact updated.');refreshAdmin();}catch(err){toast(err.message,true);} }
+async function createContact(e){e.preventDefault();const body={name:$('contact-name').value.trim(),kind:$('contact-kind').value,shift:$('contact-shift').value,phone:state.managedDemo?undefined:$('contact-phone').value.trim()||null};try{await api('/campus/contacts',{method:'POST',json:body});$('contact-form').reset();toast('Demo contact added.');refreshAdmin();}catch(err){toast(userMessage(err),true);} }
+async function updateContact(e){e.preventDefault();const form=e.currentTarget;const body={shift:form.elements.shift.value,outcome:form.elements.outcome?.value,delay_seconds:form.elements.delay_seconds?Number(form.elements.delay_seconds.value):undefined,active:form.elements.active.checked};try{await api(`/campus/contacts/${form.dataset.contactId}`,{method:'PATCH',json:body});toast('Demo contact updated.');refreshAdmin();}catch(err){toast(err.message,true);} }
 async function saveCoverage(e){e.preventDefault();const body={place_id:Number($('coverage-place').value),staff_id:Number($('coverage-staff').value),rank:Number($('coverage-rank').value)};if(!body.place_id||!body.staff_id){toast('Choose a place and contact.',true);return;}try{await api('/campus/coverage',{method:'POST',json:body});toast('Coverage saved.');if(state.selected)selectAlert(state.selected);}catch(err){toast(err.message,true);} }
 
 async function refreshStaff(){try{const alerts=await api('/medical-alerts/staff/inbox');const snapshot=JSON.stringify(alerts);if(snapshot===state.staffSnapshot)return;state.staffSnapshot=snapshot;$('staff-inbox').innerHTML=alerts.length?alerts.map(a=>`<article class="panel staff-card"><h2>Medical alert #${a.id}</h2><p>${escapeHtml(placeName(a.place_id))}${a.location_text?' · '+escapeHtml(a.location_text):''}</p><p><span class="status-tag ${escapeHtml(a.status)}">${friendly(a.status)}</span></p><button class="button button-navy" data-ack="${a.id}" ${a.assignment_status==='acknowledged'?'disabled':''}>${a.assignment_status==='acknowledged'?'Acknowledged':'Acknowledge'}</button><label for="finding-${a.id}" class="sr-only">Findings for alert ${a.id}</label><textarea id="finding-${a.id}" rows="2" placeholder="What did you find at the scene?"></textarea><button class="button button-soft" data-findings="${a.id}">Send findings</button></article>`).join(''):'<div class="panel empty-list">No alerts assigned to you.</div>';$('staff-inbox').querySelectorAll('[data-ack]').forEach(b=>b.addEventListener('click',async()=>{try{await api(`/medical-alerts/${b.dataset.ack}/staff/acknowledge`,{method:'POST'});b.disabled=true;b.textContent='Acknowledged';toast('Acknowledgement sent.');}catch(e){toast(e.message,true);}}));$('staff-inbox').querySelectorAll('[data-findings]').forEach(b=>b.addEventListener('click',async()=>{const body=$('finding-'+b.dataset.findings).value.trim();if(body.length<2){toast('Enter your findings first.',true);return;}try{await api(`/medical-alerts/${b.dataset.findings}/staff/findings`,{method:'POST',json:{findings:body}});toast('Findings sent to admin.');}catch(e){toast(e.message,true);}}));}catch(e){toast(e.message,true);} }
@@ -312,20 +652,31 @@ async function connectDemoService(){
   try {
     if(window.CER_CONFIG?.isApiConfigured && !window.CER_CONFIG.isApiConfigured())throw new Error('Demo service is not configured.');
     const [places,config]=await Promise.all([api('/medical-alerts/places'),api('/medical-alerts/config')]);
-    if(config.demo_mode!==true)throw new Error('The connected service is not the isolated demo.');
+    if(config.demo_mode!==true && config.browser_workflow!=='sql')throw new Error('The connected service does not support campus alerts.');
+    state.managedDemo=config.demo_mode===true;
     state.demoReady=true;state.places=places;
+    state.simulation=config.prototype===true;
+    if (state.simulation) localStorage.setItem('cer_validated_offline_api',alertApiUrl());
+    else localStorage.removeItem('cer_validated_offline_api');
+    $('reset-demo').classList.toggle('hidden',!state.managedDemo);
+    $('student-conversation').classList.toggle('hidden',state.managedDemo);
+    $('analytics-dashboard').closest('section').hidden=state.managedDemo;
+    $('contact-phone').hidden=state.managedDemo;
+    $('contact-phone').previousElementSibling.hidden=state.managedDemo;
+    const emergency=$('emergency-call');
+    if (config.campus_emergency_phone) { emergency.href=phoneHref(config.campus_emergency_phone); emergency.classList.remove('hidden'); }
     $('place').innerHTML='<option value="">Choose a building or hostel</option>'+places.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
     $('coverage-place').innerHTML='<option value="">Choose place</option>'+places.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     $('help-button').disabled=false;$('bystander-button').disabled=false;
-    $('service-status').textContent='Demo service connected. No real responders will be contacted.';
-    await restoreSession();showView();
+    $('service-status').textContent=state.simulation?'Simulation connected. No real responders will be contacted.':'Campus alert service connected.';
+    await restoreSession();
+    showView();
   } catch(e) {
     $('service-status').textContent=`Demo unavailable: ${e.message} Retrying automatically. For a real emergency, call emergency services directly.`;
   } finally {state.connecting=false;}
 }
 
 async function init(){
-  $('directory-title').textContent='Demo contacts'; $('contact-form').querySelector('h3').textContent='Add demo contact'; $('contact-phone').previousElementSibling.remove(); $('contact-phone').remove();
   document.querySelectorAll('.step-grid p')[1].textContent='An admin reviews the demo request and can simulate a contact.'; document.querySelectorAll('.step-grid p')[2].textContent='The dashboard simulates dispatch and team progress. No real services are contacted.';
   $('help-button').addEventListener('click',()=>startAlert('self'));
   $('bystander-button').addEventListener('click',()=>startAlert('bystander'));
@@ -342,9 +693,149 @@ async function init(){
   $('coverage-form').addEventListener('submit',saveCoverage);
   $('queue-search').addEventListener('input',()=>renderQueue(true)); $('queue-filter').addEventListener('change',()=>renderQueue(true));
   $('reset-demo').addEventListener('click',async()=>{if(!window.confirm('Clear all demo alerts and their activity? Demo contacts and other records will be kept.'))return;try{const result=await api('/demo/reset',{method:'POST'});state.selected=null;state.selectedSnapshot=null;state.queueSnapshot=null;$('admin-detail').classList.add('empty-detail');$('admin-detail').textContent='Select an alert to review it.';$('detail-id').textContent='';toast(result.message);await refreshAdmin();}catch(e){toast(userMessage(e),true);}});
-  await connectDemoService();showView();
-  state.timer=setInterval(()=>{if(!state.demoReady){connectDemoService();return;}if(state.token&&!state.user){restoreSession().then(showView);return;}if(state.user?.role==='admin')refreshAdmin();else if(state.active)refreshStudent();},15000);
-  window.addEventListener('online',()=>{if(!state.demoReady)connectDemoService();else if(state.user?.role==='admin')refreshAdmin();else if(state.active)refreshStudent();});
-}
-document.addEventListener('DOMContentLoaded',init);
 
+  // Initialize PWA features
+  if (window.CER_CONFIG?.FEATURES?.ENABLE_PWA) {
+    registerServiceWorker();
+    setupInstallPrompt();
+  }
+
+  updateOnlineStatus();
+  await connectDemoService();
+  await syncPendingAlert();
+  state.timer=setInterval(()=>{if(!state.demoReady){connectDemoService();return;}if(state.token&&!state.user){restoreSession().then(showView);return;}if(state.user?.role==='admin')refreshAdmin();else if(state.user?.role==='responder')refreshStaff();else if(state.active)refreshStudent();if(state.pending)syncPendingAlert();},15000);
+  window.addEventListener('online',async()=>{updateOnlineStatus();await connectDemoService();await syncPendingAlert();if(state.active)refreshStudent();});
+  window.addEventListener('offline',updateOnlineStatus);
+}
+// PWA and Offline Functions
+
+function registerServiceWorker() {
+  if (!navigator.serviceWorker) return;
+  const worker = new URL('./sw.js', window.location.href);
+  const script = new URL(document.querySelector('script[src*="medical.js"]').src);
+  if (script.pathname.startsWith('/static/')) worker.searchParams.set('assets', 'static');
+  if (script.search) worker.searchParams.set('release', script.search);
+  navigator.serviceWorker.register(worker).catch(error => console.warn('Offline app setup failed:', error));
+  navigator.serviceWorker.addEventListener('message', event => {
+    if (event.data?.type === 'ALERT_SYNCED') syncPendingAlert();
+  });
+}
+
+function alertApiUrl() {
+  return new URL(window.CER_CONFIG.getApiUrl('/medical-alerts'), location.href).href;
+}
+
+function canQueueGuestAlert() {
+  return !state.token && !!window.OfflineStorage &&
+    localStorage.getItem('cer_validated_offline_api') === alertApiUrl();
+}
+
+function renderPendingAlert() {
+  $('service-status').textContent = 'Demo alert saved on this device. The admin has not received it. It will retry when online.';
+}
+
+function scheduleAlertSync() {
+  navigator.serviceWorker?.ready.then(registration => registration.sync?.register('sync-alerts')).catch(() => {});
+}
+
+async function syncPendingAlert() {
+  if (!window.OfflineStorage || state.syncingAlert || state.submittingAlert) return;
+  const key = sessionStorage.getItem('medical_pending_key');
+  if (!key) return;
+  state.syncingAlert = true;
+  try {
+    let pending = await window.OfflineStorage.getAlert(key);
+    if (!pending || pending.apiUrl !== alertApiUrl()) return;
+    state.pending = key;
+    if (pending.status === 'pending_sync') {
+      renderPendingAlert();
+      if (!navigator.onLine) return;
+      await window.OfflineStorage.deliverAlert(pending);
+      pending = await window.OfflineStorage.getAlert(key);
+    }
+    if (pending.status === 'synced') {
+      saveActive(pending.result,key);
+      renderStudentStatus(pending.result);
+      $('service-status').textContent = 'The queued demo alert reached the admin.';
+    } else if (pending.status === 'failed') {
+      $('service-status').textContent = 'The queued demo alert could not be delivered. Start a new request when online.';
+    } else {
+      return;
+    }
+    await window.OfflineStorage.deleteAlert(key);
+    state.pending = null;
+    sessionStorage.removeItem('medical_pending_key');
+  } catch (error) {
+    console.warn('Could not sync the queued demo alert:',error);
+  } finally {
+    state.syncingAlert = false;
+  }
+}
+
+function updateOnlineStatus() {
+  const indicator = $('online-indicator');
+  if (indicator) indicator.textContent = navigator.onLine ? 'Online' : 'Offline';
+  const canQueue = canQueueGuestAlert();
+  for (const id of ['help-button', 'bystander-button']) $(id).disabled = !state.demoReady && !canQueue;
+}
+
+function setupInstallPrompt() {
+  let deferredPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent the mini-infobar from appearing on mobile
+    e.preventDefault();
+    deferredPrompt = e;
+
+    // Show custom install button
+    showInstallButton(deferredPrompt);
+  });
+
+  window.addEventListener('appinstalled', () => {
+    toast('App installed successfully!');
+    hideInstallButton();
+  });
+}
+
+function showInstallButton(deferredPrompt) {
+  state.installPrompt = deferredPrompt;
+
+  // Create or show install button
+  let installBtn = $('pwa-install-btn');
+  if (!installBtn) {
+    installBtn = document.createElement('button');
+    installBtn.id = 'pwa-install-btn';
+    installBtn.className = 'button button-soft';
+    installBtn.style.position = 'fixed';
+    installBtn.style.bottom = '20px';
+    installBtn.style.right = '20px';
+    installBtn.style.zIndex = '1000';
+    installBtn.innerHTML = '📱 Install App';
+    installBtn.addEventListener('click', () => installApp(deferredPrompt));
+    document.body.appendChild(installBtn);
+  }
+  installBtn.classList.remove('hidden');
+}
+
+function hideInstallButton() {
+  const installBtn = $('pwa-install-btn');
+  if (installBtn) {
+    installBtn.classList.add('hidden');
+  }
+}
+
+async function installApp(deferredPrompt) {
+  if (!deferredPrompt) return;
+
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;
+
+  if (outcome === 'accepted') {
+    toast('App installed successfully!');
+  }
+
+  deferredPrompt = null;
+  hideInstallButton();
+}
+
+document.addEventListener('DOMContentLoaded',init);

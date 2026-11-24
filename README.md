@@ -26,9 +26,13 @@ The campus place list is seeded from the college locations supplied for this pro
 
 The browser app is a project prototype until the college supplies a staffed duty roster, verifies all contact numbers, configures an approved outbound provider, and tests delivery and escalation. It does not claim that a simulated alert reached anyone.
 
+After connecting to a simulation, the browser can save a guest alert during a network outage and retry it when connectivity returns. The page shows whether the alert is still on the device or has reached the admin queue.
+
 ### Cloud computing architecture
 
 See [docs/CLOUD-ARCHITECTURE.md](docs/CLOUD-ARCHITECTURE.md) for the ECS, RDS, SQS, SNS, worker, migration, and monitoring path. The API and worker use the same container image with different commands. Run `alembic upgrade head` as a one-off deployment task before starting production services. Local SQLite startup creates tables for development; production startup requires the migrated schema.
+
+The isolated CDK demo uses DynamoDB and `Dockerfile.lambda`. When releasing a new Lambda image, publish it to the configured ECR repository and pass its tag with `cdk deploy -c imageTag=<tag>` from `infra/cdk`.
 
 ---
 

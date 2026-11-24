@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10233b">
-  <meta name="description" content="Request medical assistance on campus with one tap.">
+  <meta name="description" content="Request medical assistance on campus with one tap. Previously connected demos can queue guest alerts while offline.">
   <title>Campus Medical Assistance</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b92731'/%3E%3Cpath d='M16 6v20M6 16h20' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="/static/medical.css">
 </head>
 <body>
@@ -18,6 +19,7 @@
         <span>Campus<span class="brand-accent">Medical</span><small>ASSISTANCE</small></span>
       </a>
       <nav class="header-actions" aria-label="Account">
+        <span id="online-indicator" class="online-indicator online" aria-live="polite">Online</span>
         <span id="account-label" class="account-label">Guest access</span>
         <button id="login-open" class="button button-outline button-small" type="button">Sign in</button>
         <button id="logout" class="button button-outline button-small hidden" type="button">Sign out</button>
@@ -73,10 +75,29 @@
             <label for="details">Anything else the admin should know?</label><textarea id="details" name="details" maxlength="1000" rows="3" placeholder="Optional details"></textarea>
             <button class="button button-navy" type="submit">Save details</button><p id="details-feedback" class="muted" role="status" aria-live="polite"></p>
           </form>
+          <section id="student-conversation" class="hidden detail-section" aria-label="Conversation with the admin">
+            <h3>Conversation</h3>
+            <div id="student-messages" class="message-list" aria-live="polite"></div>
+            <form id="student-message-form" class="message-compose">
+              <label class="sr-only" for="student-message">Message to the admin</label>
+              <input id="student-message" maxlength="1000" placeholder="Write a message to the admin" required>
+              <button class="button button-navy" type="submit">Send</button>
+            </form>
+          </section>
         </div>
       </section>
 
       <section class="how-it-works" aria-labelledby="steps-heading"><div class="section-heading"><p class="eyebrow">A SIMPLE RESPONSE PATH</p><h2 id="steps-heading">What happens after you tap</h2></div><div class="step-grid"><article><span class="step-number">01</span><h3>Alert sent</h3><p>The request reaches the admin queue immediately, with or without a location.</p></article><article><span class="step-number">02</span><h3>Human review</h3><p>An admin contacts you or sends nearby staff to confirm what is needed.</p></article><article><span class="step-number">03</span><h3>Help coordinated</h3><p>The admin can alert department or hostel staff and arrange medical assistance.</p></article></div></section>
+
+      <section id="my-alerts" class="page-shell hidden" aria-labelledby="my-alerts-heading">
+        <div class="my-alerts-header">
+          <h2 id="my-alerts-heading">My Alerts</h2>
+          <p class="muted">View your alert history and track status in real time.</p>
+        </div>
+        <div id="my-alerts-list" class="alert-history-list">
+          <div class="empty-list">No alerts yet. Your first alert will appear here.</div>
+        </div>
+      </section>
     </section>
 
     <section id="admin-view" class="page-shell workspace hidden" aria-labelledby="admin-title">
@@ -89,15 +110,29 @@
         <section class="panel detail-panel" aria-labelledby="detail-title"><div class="panel-title"><h2 id="detail-title">Alert details</h2><span id="detail-id" class="muted"></span></div><div id="admin-detail" class="empty-detail">Select an alert to review it.</div></section>
       </div>
       <section class="panel directory-panel" aria-labelledby="directory-title"><div class="panel-title"><div><h2 id="directory-title">Campus staff directory</h2><p class="muted">The admin coordinates staff directly. Notifications are simulated in this demo.</p></div></div><div class="directory-grid"><form id="contact-form" class="compact-form"><h3>Add staff contact</h3><label for="contact-name">Name</label><input id="contact-name" required minlength="2"><label for="contact-kind">Role</label><select id="contact-kind"><option value="department">Department staff</option><option value="caretaker">Hostel caretaker</option><option value="warden">Warden</option><option value="medical">Medical team</option><option value="backup">Backup contact</option></select><label for="contact-phone">Phone</label><input id="contact-phone" type="tel"><label for="contact-shift">Shift</label><select id="contact-shift"><option value="all">All hours</option><option value="day">Day</option><option value="night">Night</option></select><button class="button button-navy" type="submit">Add contact</button></form><div><div id="contact-list" class="contact-list"></div><form id="coverage-form" class="compact-form coverage-form"><h3>Suggest staff for a place</h3><label for="coverage-place">Campus place</label><select id="coverage-place"></select><label for="coverage-staff">Staff contact</label><select id="coverage-staff"></select><label for="coverage-rank">Suggestion order</label><input id="coverage-rank" type="number" min="1" max="100" value="1"><button class="button button-navy" type="submit">Save coverage</button></form></div></div></section>
+
+      <section class="panel analytics-panel" aria-labelledby="analytics-title"><div class="panel-title"><h2 id="analytics-title">Analytics Dashboard</h2><p class="muted">Response times, volume trends, and false report rates</p></div><div id="analytics-dashboard" class="analytics-dashboard"></div></section>
     </section>
 
+    <section id="staff-inbox" class="page-shell hidden" aria-label="Staff inbox"></section>
   </main>
 
   <footer class="site-footer"><div class="footer-inner"><span>Campus Medical Assistance</span><span>For medical emergencies on this college campus only</span></div></footer>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title"><form id="auth-form" method="dialog"><div class="dialog-head"><div><p class="eyebrow">ACCOUNT ACCESS</p><h2 id="auth-title">Sign in</h2></div><button id="auth-close" class="icon-button" type="button" aria-label="Close">×</button></div><p class="muted">The emergency button works without signing in. Students and admins can sign in here; staff are coordinated by the admin.</p><div id="register-name-wrap" class="hidden"><label for="auth-name">Full name</label><input id="auth-name" autocomplete="name"></div><label for="auth-email">Email</label><input id="auth-email" type="email" autocomplete="username" required><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="current-password" required><p id="auth-error" class="form-error hidden" role="alert"></p><button id="auth-submit" class="button button-navy button-full" type="submit">Sign in</button><button id="auth-switch" class="text-button" type="button">Create a student account</button></form></dialog>
+
+  <dialog id="alert-detail-dialog" class="alert-detail-dialog" aria-labelledby="alert-detail-title">
+    <div class="dialog-head">
+      <div><p class="eyebrow">ALERT DETAIL</p><h2 id="alert-detail-title">Alert Details</h2></div>
+      <button id="alert-detail-close" class="icon-button" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="alert-detail-content" class="alert-detail-content">
+      <div class="alert-detail-loading">Loading alert details...</div>
+    </div>
+  </dialog>
   <script src="/static/config.js" defer></script>
+  <script src="/static/offline.js" defer></script>
   <script src="/static/medical.js" defer></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 from uuid import uuid4
 import tempfile
 import os
+import sys
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, UnidentifiedImageError
@@ -30,10 +31,9 @@ def validate_file_extension(filename: str) -> None:
 
 def validate_mime_type_with_python_magic(file: UploadFile) -> str:
     """Validate MIME type using python-magic library"""
-    try:
-        import magic
-    except ImportError:
-        raise HTTPException(status_code=500, detail="python-magic not available")
+    if sys.platform == "win32":
+        raise ImportError("Native libmagic is disabled on Windows")
+    import magic
 
     chunk = file.file.read(8192)
     file.file.seek(0)
