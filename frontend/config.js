@@ -29,6 +29,10 @@ window.CER_CONFIG = {
     ENABLE_NOTIFICATIONS: true,
     ENABLE_MESSAGES: false,
     ENABLE_LOCATION_UPDATES: true,
+    ENABLE_PWA: true,
+    ENABLE_OFFLINE_SYNC: true,
+    ENABLE_BACKGROUND_SYNC: true,
+    ENABLE_INSTALL_PROMPT: true,
   },
 
   // Build info (populated at build time)
@@ -56,6 +60,8 @@ window.CER_CONFIG = {
     // Production pages must not accept a query-string or localStorage URL:
     // that could send credentials and alert details to an unrelated server.
     const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+    const servedByApi = window.document?.querySelector('script[src^="/static/"][src*="config.js"]');
+    if (servedByApi) this.API_BASE_URL = '';
     const localApi = (value) => {
       try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !url.username && !url.password; }
       catch { return false; }

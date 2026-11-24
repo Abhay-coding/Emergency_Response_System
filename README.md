@@ -19,6 +19,8 @@
 
 Students can submit a medical assistance request with one tap, including as a guest. They can then share a location and follow the request's progress. An administrator reviews the alert, records verification notes, and coordinates a **simulated** response using fictional contacts.
 
+After connecting to a simulation, the browser can save a guest alert during a network outage and retry when connectivity returns. The page shows whether the alert is still on the device or has reached the admin queue.
+
 | Student experience | Operations dashboard |
 | --- | --- |
 | ![Student portal with the one-tap alert](docs/screenshots/student-portal.png) | ![Admin dashboard showing a fictional alert](docs/screenshots/admin-dashboard.png) |
@@ -100,6 +102,8 @@ docs/              Setup notes, architecture, and screenshots
 ```
 
 ## Deployment notes
+
+Build the managed demo image with `Dockerfile.lambda` and publish it to the configured ECR repository. From `infra/cdk`, select the new image with `cdk deploy -c imageTag=<tag>`.
 
 The checked-in deployment configuration is tailored to the original project's account and Pages origin. Forks need their own AWS account, ECR image, API endpoint, GitHub Pages configuration, and allowed origins. Review the infrastructure and estimated AWS costs before deploying; do not commit credentials or application data. AWS resources can incur charges even at low usage.
 

@@ -1,5 +1,6 @@
 import os
 from datetime import timedelta
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -44,6 +45,48 @@ def add_user(maker, email, role):
 
 def auth(user_id):
     return {"Authorization": f"Bearer {create_access_token(str(user_id))}"}
+
+
+def test_urgent_alert_remains_visible_and_cannot_reopen_after_resolution():
+    client, maker = client_with_db()
+    admin = auth(add_user(maker, "queue-admin@example.edu", Role.admin))
+    try:
+        created = client.post("/api/v1/medical-alerts", json={"source": "self"},
+                              headers={"Idempotency-Key": str(uuid4())}).json()
+        path = f"/api/v1/medical-alerts/{created['id']}"
+        guest = {"X-Alert-Token": created["guest_token"]}
+        with maker() as db:
+            now = utc_now()
+            db.add_all(MedicalAlert(source="self", status="resolved", idempotency_key=str(uuid4()),
+                                    created_at=now + timedelta(seconds=index + 1)) for index in range(100))
+            db.commit()
+        assert client.post(path + "/escalate", headers=guest).status_code == 200
+        queue = client.get("/api/v1/medical-alerts/admin/queue", headers=admin).json()
+        assert queue[0]["id"] == created["id"]
+        assert queue[0]["urgent_follow_up"] is True
+        assert client.post(path + "/resolve", json={"note": "Completed review"}, headers=admin).status_code == 200
+        assert client.post(path + "/contact", json={"note": "An older update"}, headers=admin).status_code == 409
+        assert client.post(path + "/claim", headers=admin).status_code == 409
+        assert client.get(path + "/public", headers=guest).json()["status"] == "resolved"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_sqlite_location_analytics_measures_elapsed_minutes():
+    client, maker = client_with_db()
+    admin = auth(add_user(maker, "analytics-admin@example.edu", Role.admin))
+    try:
+        now = utc_now()
+        with maker() as db:
+            db.add(MedicalAlert(source="self", status="acknowledged", idempotency_key=str(uuid4()),
+                                latitude=0, longitude=0, created_at=now - timedelta(minutes=2), acknowledged_at=now))
+            db.commit()
+        response = client.get("/api/v1/medical-alerts/analytics/response-time-by-location", headers=admin)
+        assert response.status_code == 200
+        [row] = response.json()
+        assert (row["latitude"], row["longitude"], row["avg_response_time_minutes"]) == (0, 0, 2)
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_guest_one_tap_and_private_status():

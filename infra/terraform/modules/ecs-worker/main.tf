@@ -78,10 +78,8 @@ resource "aws_ecs_service" "worker" {
     type = "ECS"
   }
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 50
-  }
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 50
 
   enable_ecs_managed_tags = true
   propagate_tags          = "TASK_DEFINITION"
@@ -90,23 +88,4 @@ resource "aws_ecs_service" "worker" {
     Name        = "${var.project_name}-${var.environment}-worker-service"
     Environment = var.environment
   }
-}
-
-# ============================================================
-# OUTPUTS
-# ============================================================
-
-output "service_name" {
-  value       = aws_ecs_service.worker.name
-  description = "ECS Worker Service Name"
-}
-
-output "service_arn" {
-  value       = aws_ecs_service.worker.arn
-  description = "ECS Worker Service ARN"
-}
-
-output "task_definition_arn" {
-  value       = aws_ecs_task_definition.worker.arn
-  description = "Worker Task Definition ARN"
 }

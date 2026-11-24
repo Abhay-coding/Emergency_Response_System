@@ -3,7 +3,7 @@ from uuid import UUID
 from hashlib import sha256
 from hmac import new as hmac_new
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.security import create_access_token, decode_access_token, verify_password
@@ -65,7 +65,9 @@ def places(repo: DataAPIRepository = Depends(get_repo)): return repo.places()
 
 @router.get("/medical-alerts/config")
 def public_config(repo: DataAPIRepository = Depends(get_repo)):
-    return {"campus_emergency_phone": None, "prototype": True, "demo_mode": bool(getattr(repo, "isolated_demo_mode", False))}
+    isolated = bool(getattr(repo, "isolated_demo_mode", False))
+    return {"campus_emergency_phone": None, "prototype": True, "demo_mode": isolated,
+            "alert_history": isolated}
 
 @router.post("/medical-alerts", status_code=201)
 def create_alert(data: AlertIn, key: str = Header(..., alias="Idempotency-Key"), user=Depends(current_user), repo: DataAPIRepository = Depends(get_repo), claims: DynamoLedger = Depends(ledger)):
@@ -88,6 +90,32 @@ def create_alert(data: AlertIn, key: str = Header(..., alias="Idempotency-Key"),
 @router.get("/medical-alerts/admin/queue")
 def queue(_: dict = Depends(admin), repo: DataAPIRepository = Depends(get_repo)):
     return [{k:v for k,v in alert.items() if k not in {"guest_token_hash","idempotency_key","pk","sk"}} for alert in repo.queue()]
+
+@router.get("/medical-alerts/history")
+def alert_history(user=Depends(current_user), repo: DataAPIRepository = Depends(get_repo),
+                  limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0)):
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    rows = repo.reporter_alerts(user["id"])
+    fields = ("id", "source", "status", "place_id", "created_at")
+    return {"items": [{key: row.get(key) for key in fields} for row in rows[offset:offset + limit]],
+            "total": len(rows), "limit": limit, "offset": offset}
+
+
+@router.get("/medical-alerts/{alert_id}/detail")
+def alert_detail(alert_id: int, user=Depends(current_user), repo: DataAPIRepository = Depends(get_repo)):
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    alert = repo.alert(alert_id)
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    if alert.get("reporter_id") != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Alert access denied")
+    fields = ("id", "source", "status", "verification", "place_id", "location_text", "callback_phone",
+              "details", "latitude", "longitude", "accuracy_m", "created_at", "acknowledged_at",
+              "identity_verified", "claimed_by")
+    return {key: alert.get(key) for key in fields}
+
 
 @router.get("/medical-alerts/{alert_id}/public")
 def public_status(alert_id:int, token:str=Header(..., alias="X-Alert-Token"), repo:DataAPIRepository=Depends(get_repo)):
@@ -125,7 +153,11 @@ def escalate(alert_id: int, token: str = Header(..., alias="X-Alert-Token"), rep
     alert=repo.alert(alert_id)
     if not alert: raise HTTPException(404, "Demo alert no longer exists")
     if alert.get("guest_token_hash") != sha256(token.encode()).hexdigest(): raise HTTPException(403, "Alert access denied")
-    return repo.escalate_alert(alert_id)
+    if alert.get("status") in {"resolved", "closed_false_report"}:
+        raise HTTPException(409, "This alert is closed")
+    if not repo.escalate_alert(alert_id):
+        raise HTTPException(409, "This alert changed. Check its latest status.")
+    return {"id": alert_id, "escalated": True}
 
 @router.get("/medical-alerts/{alert_id}/events")
 def events(alert_id:int, _:dict=Depends(admin), repo:DataAPIRepository=Depends(get_repo)):

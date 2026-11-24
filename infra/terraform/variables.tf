@@ -91,24 +91,24 @@ variable "alb_domain_name" {
 variable "alb_target_group_config" {
   description = "Target group configuration for ALB"
   type = object({
-    protocol               = string
-    port                   = number
-    health_check_path      = string
-    health_check_interval  = number
-    health_check_timeout   = number
-    healthy_threshold      = number
-    unhealthy_threshold    = number
-    matcher                = string
+    protocol              = string
+    port                  = number
+    health_check_path     = string
+    health_check_interval = number
+    health_check_timeout  = number
+    healthy_threshold     = number
+    unhealthy_threshold   = number
+    matcher               = string
   })
   default = {
-    protocol               = "HTTP"
-    port                   = 8000
-    health_check_path      = "/health"
-    health_check_interval  = 30
-    health_check_timeout   = 10
-    healthy_threshold      = 2
-    unhealthy_threshold    = 3
-    matcher                = "200"
+    protocol              = "HTTP"
+    port                  = 8000
+    health_check_path     = "/health"
+    health_check_interval = 30
+    health_check_timeout  = 10
+    healthy_threshold     = 2
+    unhealthy_threshold   = 3
+    matcher               = "200"
   }
 }
 
@@ -280,16 +280,7 @@ variable "ecs_secrets" {
     name      = string
     valueFrom = string
   }))
-  default = [
-    {
-      name      = "JWT_SECRET"
-      valueFrom = "arn:aws:secretsmanager:${aws_region}:${account_id}:secret:emergency-response/jwt-secret"
-    },
-    {
-      name      = "DATABASE_URL"
-      valueFrom = "arn:aws:secretsmanager:${aws_region}:${account_id}:secret:emergency-response/database-url"
-    }
-  ]
+  default = []
 }
 
 # ============================================================
@@ -330,16 +321,7 @@ variable "worker_secrets" {
     name      = string
     valueFrom = string
   }))
-  default = [
-    {
-      name      = "JWT_SECRET"
-      valueFrom = "arn:aws:secretsmanager:${aws_region}:${account_id}:secret:emergency-response/jwt-secret"
-    },
-    {
-      name      = "DATABASE_URL"
-      valueFrom = "arn:aws:secretsmanager:${aws_region}:${account_id}:secret:emergency-response/database-url"
-    }
-  ]
+  default = []
 }
 
 # ============================================================

@@ -7,5 +7,5 @@ from campus_medical_stack import CampusMedicalDemoStack
 
 
 app = cdk.App()
-CampusMedicalDemoStack(app, "CampusMedicalDemo")
+CampusMedicalDemoStack(app, "CampusMedicalDemo", image_tag=app.node.try_get_context("imageTag") or "campus-medical-demo-fix-5c02186")
 app.synth()

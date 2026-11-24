@@ -1,5 +1,6 @@
 """Medical-only, human-operated campus alert workflow."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from hmac import new as hmac_new, compare_digest
@@ -8,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import update
+from sqlalchemy import case, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,9 +24,9 @@ from app.models import (
 )
 from app.schemas import validate_no_xss
 from app.services.notifications import queue_job
-from app.data_api_repository import DataAPIRepository, get_repo
 
 router = APIRouter(prefix="/medical-alerts", tags=["Medical alerts"])
+TERMINAL_STATUSES = ("resolved", "closed_false_report")
 
 PLACE_NAMES = [
     ("CSED Lab", "building"), ("Library", "building"),
@@ -89,6 +90,7 @@ def alert_view(alert: MedicalAlert, *, limited: bool = False) -> dict:
         "place_id": alert.place_id, "location_text": alert.location_text,
         "created_at": alert.created_at.isoformat() if alert.created_at else None,
         "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+        "updated_at": alert.updated_at.isoformat() if alert.updated_at else None,
     }
     if not limited:
         data.update(
@@ -151,34 +153,218 @@ def places(db: Session = Depends(get_db)):
 @router.get("/config")
 def public_config():
     return {"campus_emergency_phone": settings.campus_emergency_phone,
-            "prototype": settings.notification_mode != "sns"}
+            "prototype": settings.notification_mode != "sns", "browser_workflow": "sql"}
+
+
+@router.get("/analytics/response-times")
+@limiter.limit("30/minute")
+def analytics_response_times(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(Role.admin)),
+    days: int = 30,
+):
+    """Get response time analytics (p50, p95) by day"""
+    from sqlalchemy import func, extract
+    from datetime import datetime, timedelta
+
+    since = utc_now() - timedelta(days=days)
+
+    # Get alerts with acknowledged_at and created_at
+    alerts = db.query(MedicalAlert).filter(
+        MedicalAlert.created_at >= since,
+        MedicalAlert.acknowledged_at.isnot(None),
+    ).all()
+
+    # Group by day
+    daily_data = {}
+    for alert in alerts:
+        day_key = alert.created_at.date().isoformat()
+        if day_key not in daily_data:
+            daily_data[day_key] = []
+        response_time = (alert.acknowledged_at - alert.created_at).total_seconds() / 60  # minutes
+        daily_data[day_key].append(response_time)
+
+    # Calculate percentiles per day
+    result = []
+    for day in sorted(daily_data.keys()):
+        times = sorted(daily_data[day])
+        n = len(times)
+        if n > 0:
+            p50 = times[n // 2] if n % 2 == 1 else (times[n // 2 - 1] + times[n // 2]) / 2
+            p95_idx = int(0.95 * (n - 1))
+            p95 = times[p95_idx]
+            result.append({
+                "date": day,
+                "count": n,
+                "p50_minutes": round(p50, 2),
+                "p95_minutes": round(p95, 2),
+                "avg_minutes": round(sum(times) / n, 2),
+            })
+
+    return result
+
+
+@router.get("/analytics/volume-by-location")
+@limiter.limit("30/minute")
+def analytics_volume_by_location(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(Role.admin)),
+    days: int = 30,
+):
+    """Get alert volume by location"""
+    from sqlalchemy import func
+    from datetime import timedelta
+
+    since = utc_now() - timedelta(days=days)
+
+    # Get alerts with place_id
+    alerts = db.query(
+        MedicalAlert.place_id,
+        CampusPlace.name,
+        func.count(MedicalAlert.id).label('count')
+    ).join(CampusPlace, MedicalAlert.place_id == CampusPlace.id, isouter=True).filter(
+        MedicalAlert.created_at >= since,
+    ).group_by(MedicalAlert.place_id, CampusPlace.name).all()
+
+    return [
+        {
+            "place_id": r.place_id,
+            "place_name": r.name or "Unknown",
+            "count": r.count,
+        }
+        for r in alerts
+    ]
+
+
+@router.get("/analytics/false-report-rate")
+@limiter.limit("30/minute")
+def analytics_false_report_rate(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(Role.admin)),
+    days: int = 30,
+):
+    """Get false report rate by day"""
+    from datetime import timedelta
+
+    since = utc_now() - timedelta(days=days)
+
+    # Get all alerts in period
+    alerts = db.query(MedicalAlert).filter(
+        MedicalAlert.created_at >= since,
+    ).all()
+
+    # Group by day
+    daily_data = {}
+    for alert in alerts:
+        day_key = alert.created_at.date().isoformat()
+        if day_key not in daily_data:
+            daily_data[day_key] = {"total": 0, "false": 0}
+        daily_data[day_key]["total"] += 1
+        if alert.status == "closed_false_report":
+            daily_data[day_key]["false"] += 1
+
+    result = []
+    for day in sorted(daily_data.keys()):
+        data = daily_data[day]
+        rate = (data["false"] / data["total"] * 100) if data["total"] > 0 else 0
+        result.append({
+            "date": day,
+            "total_alerts": data["total"],
+            "false_reports": data["false"],
+            "false_report_rate": round(rate, 2),
+        })
+
+    return result
+
+
+@router.get("/analytics/status-distribution")
+@limiter.limit("30/minute")
+def analytics_status_distribution(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(Role.admin)),
+    days: int = 30,
+):
+    """Get alert status distribution"""
+    from sqlalchemy import func
+    from datetime import timedelta
+
+    since = utc_now() - timedelta(days=days)
+
+    # Get count by status
+    stats = db.query(
+        MedicalAlert.status,
+        func.count(MedicalAlert.id).label('count')
+    ).filter(
+        MedicalAlert.created_at >= since,
+    ).group_by(MedicalAlert.status).all()
+
+    return [
+        {"status": r.status, "count": r.count}
+        for r in stats
+    ]
+
+
+@router.get("/analytics/response-time-by-location")
+@limiter.limit("30/minute")
+def analytics_response_time_by_location(
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(Role.admin)),
+    days: int = 30,
+):
+    """Get response time by location (for heatmap)"""
+    from sqlalchemy import func
+    from datetime import timedelta
+
+    since = utc_now() - timedelta(days=days)
+
+    if db.get_bind().dialect.name == "sqlite":
+        elapsed_minutes = (func.julianday(MedicalAlert.acknowledged_at) -
+                           func.julianday(MedicalAlert.created_at)) * 1440
+    else:
+        elapsed_minutes = func.extract("epoch", MedicalAlert.acknowledged_at - MedicalAlert.created_at) / 60
+    alerts = db.query(
+        MedicalAlert.place_id, CampusPlace.name,
+        func.avg(MedicalAlert.latitude).label("avg_latitude"),
+        func.avg(MedicalAlert.longitude).label("avg_longitude"),
+        func.avg(elapsed_minutes).label("avg_response_time"),
+        func.count(MedicalAlert.id).label("count"),
+    ).outerjoin(CampusPlace, MedicalAlert.place_id == CampusPlace.id).filter(
+        MedicalAlert.created_at >= since,
+        MedicalAlert.acknowledged_at.isnot(None),
+        MedicalAlert.latitude.isnot(None),
+        MedicalAlert.longitude.isnot(None),
+    ).group_by(MedicalAlert.place_id, CampusPlace.name).all()
+
+    return [
+        {
+            "place_id": r.place_id,
+            "place_name": r.name or "Unknown",
+            "latitude": float(r.avg_latitude),
+            "longitude": float(r.avg_longitude),
+            "avg_response_time_minutes": round(float(r.avg_response_time), 2),
+            "count": r.count,
+        }
+        for r in alerts
+    ]
 
 
 @router.post("", status_code=201)
 @limiter.limit("10/minute")
 def create_alert(request: Request, data: AlertCreate,
                  idempotency_key: str = Header(..., alias="Idempotency-Key"),
-                 db: Session = Depends(get_db), user: User | None = Depends(get_optional_user),
-                 repo: DataAPIRepository | None = Depends(lambda: get_repo() if settings.data_api_enabled else None)):
+                 db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)):
     try:
         parsed_key = UUID(idempotency_key)
         # Accept any valid UUID version, not just v4
         idempotency_key = str(parsed_key)
     except ValueError:
         raise HTTPException(422, "Idempotency-Key must be a valid UUID")
-    if repo:
-        tx = repo.begin_transaction()
-        try:
-            inserted = repo.execute(
-                "INSERT INTO medical_alerts (idempotency_key, source, reporter_id, status, verification, created_at, updated_at) VALUES (:key, :source, :reporter_id, 'new', 'unverified', NOW(), NOW()) RETURNING id",
-                [{"name":"key","value":{"stringValue":idempotency_key}}, {"name":"source","value":{"stringValue":data.source}}, {"name":"reporter_id","value":{"isNull": user is None, **({"longValue":user.id} if user else {})}}], tx)
-            alert_id = inserted["records"][0][0]["longValue"]
-            repo.execute("INSERT INTO alert_events (alert_id, actor_id, action, created_at) VALUES (:alert_id, :actor_id, 'created', NOW())", [{"name":"alert_id","value":{"longValue":alert_id}}, {"name":"actor_id","value":{"isNull": user is None, **({"longValue":user.id} if user else {})}}], tx)
-            repo.commit(tx)
-            return {"id": alert_id, "status": "new", "identity_verified": bool(user), "guest_token": None}
-        except Exception as exc:
-            repo.rollback(tx)
-            raise HTTPException(503, "Unable to record medical alert") from exc
+
     existing = db.query(MedicalAlert).filter_by(idempotency_key=idempotency_key).first()
     if existing:
         if existing.reporter_id != (user.id if user else None):
@@ -187,6 +373,7 @@ def create_alert(request: Request, data: AlertCreate,
         if not user and guest_access(existing, token_for_key(idempotency_key)):
             result["guest_token"] = token_for_key(idempotency_key)
         return result
+
     guest_token = token_for_key(idempotency_key) if not user else None
     alert = MedicalAlert(
         source=data.source, reporter_id=user.id if user else None,
@@ -221,11 +408,53 @@ def my_alerts(db: Session = Depends(get_db), user: User | None = Depends(get_opt
             .filter_by(reporter_id=user.id).order_by(MedicalAlert.created_at.desc()).limit(30).all()]
 
 
+@router.get("/history")
+def alert_history(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.reporter)),
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Get paginated history of user's alerts"""
+    alerts = db.query(MedicalAlert).filter_by(reporter_id=user.id).order_by(
+        MedicalAlert.created_at.desc()
+    ).offset(offset).limit(limit).all()
+    total = db.query(MedicalAlert).filter_by(reporter_id=user.id).count()
+    return {
+        "items": [alert_view(a) for a in alerts],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/{alert_id}/detail")
+def alert_detail(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+    x_alert_token: str | None = Header(default=None, alias="X-Alert-Token"),
+):
+    """Get detailed view of an alert including events and messages"""
+    alert = db.get(MedicalAlert, alert_id)
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    access_or_403(alert, user, x_alert_token)
+    return alert_view(alert)
+
+
 @router.get("/admin/queue")
 @limiter.limit("30/minute")
 def admin_queue(request: Request, db: Session = Depends(get_db), admin: User = Depends(require_roles(Role.admin))):
-    alerts = db.query(MedicalAlert).order_by(MedicalAlert.created_at.desc()).limit(100).all()
-    return [alert_view(a) for a in alerts]
+    active = db.query(MedicalAlert).filter(MedicalAlert.status.not_in(TERMINAL_STATUSES)).order_by(
+        MedicalAlert.created_at.desc(), MedicalAlert.id.desc()).all()
+    recent_closed = db.query(MedicalAlert).filter(MedicalAlert.status.in_(TERMINAL_STATUSES)).order_by(
+        MedicalAlert.created_at.desc(), MedicalAlert.id.desc()).limit(100).all()
+    follow_ups = dict(db.query(AlertEvent.alert_id, func.max(AlertEvent.created_at)).filter(
+        AlertEvent.action == "urgent_follow_up", AlertEvent.alert_id.in_([alert.id for alert in active])
+    ).group_by(AlertEvent.alert_id).all())
+    return [dict(alert_view(alert), urgent_follow_up=alert.id in follow_ups)
+            for alert in [*active, *recent_closed]]
 
 
 @router.get("/staff/inbox")
@@ -272,7 +501,15 @@ def public_status(alert_id: int, x_alert_token: str | None = Header(default=None
     if not alert:
         raise HTTPException(404, "Alert not found")
     access_or_403(alert, user, x_alert_token)
-    return alert_view(alert, limited=True)
+    result = alert_view(alert)
+    result.pop("reporter_id")
+    result.pop("claimed_by")
+    stages = {"created": "new", "claimed": "acknowledged", "staff_alerted": "staff",
+              "medical_dispatched": "medical", "resolved": "resolved"}
+    rows = db.query(AlertEvent).filter(AlertEvent.alert_id == alert.id, AlertEvent.action.in_(stages)).order_by(
+        AlertEvent.id).all()
+    result["history"] = [{"stage": stages[row.action], "created_at": row.created_at.isoformat()} for row in rows]
+    return result
 
 
 @router.patch("/{alert_id}/location")
@@ -315,12 +552,16 @@ def claim_alert(request: Request, alert_id: int, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
     now = utc_now()
     result = db.execute(update(MedicalAlert).where(
-        MedicalAlert.id == alert_id, MedicalAlert.claimed_by.is_(None)
-    ).values(claimed_by=admin.id, acknowledged_at=now, status="acknowledged"))
+        MedicalAlert.id == alert_id, MedicalAlert.claimed_by.is_(None),
+        MedicalAlert.status.in_(("new", "checking")), MedicalAlert.closed_at.is_(None),
+    ).values(claimed_by=admin.id, acknowledged_at=now,
+             status=case((MedicalAlert.status == "new", "acknowledged"), else_=MedicalAlert.status)))
     if not result.rowcount:
         alert = db.get(MedicalAlert, alert_id)
         if not alert:
             raise HTTPException(404, "Alert not found")
+        if alert.status in TERMINAL_STATUSES or alert.closed_at is not None:
+            raise HTTPException(409, "This alert is closed")
         if alert.claimed_by != admin.id:
             raise HTTPException(409, "Another admin has claimed this alert")
     else:
@@ -336,11 +577,37 @@ def admin_alert(db: Session, alert_id: int) -> MedicalAlert:
     return alert
 
 
+def open_alert_for_update(db: Session, alert_id: int) -> MedicalAlert:
+    result = db.execute(update(MedicalAlert).where(
+        MedicalAlert.id == alert_id, MedicalAlert.closed_at.is_(None),
+        MedicalAlert.status.not_in(TERMINAL_STATUSES),
+    ).values(version=MedicalAlert.version + 1))
+    if not result.rowcount:
+        admin_alert(db, alert_id)
+        raise HTTPException(409, "This alert is closed")
+    return db.get(MedicalAlert, alert_id)
+
+
+@router.post("/{alert_id}/escalate")
+@limiter.limit("10/minute")
+def escalate(request: Request, alert_id: int, db: Session = Depends(get_db),
+             user: User | None = Depends(get_optional_user),
+             token: str | None = Header(default=None, alias="X-Alert-Token")):
+    access_or_403(admin_alert(db, alert_id), user, token)
+    alert = open_alert_for_update(db, alert_id)
+    event(db, alert.id, "urgent_follow_up", user.id if user else None)
+    alert.updated_at = utc_now()
+    db.commit()
+    return {"status": "recorded"}
+
+
 @router.post("/{alert_id}/contact")
 @limiter.limit("20/minute")
 def record_contact(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                    admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
+    if alert.status not in ("new", "acknowledged", "checking"):
+        raise HTTPException(409, "This alert has moved past initial review")
     alert.status = "checking"
     event(db, alert.id, "contact_attempt", admin.id, data.note)
     db.commit()
@@ -351,7 +618,7 @@ def record_contact(request: Request, alert_id: int, data: ActionNote, db: Sessio
 @limiter.limit("20/minute")
 def verify_need(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
     alert.verification = "confirmed_need"
     event(db, alert.id, "need_confirmed", admin.id, data.note)
     db.commit()
@@ -362,7 +629,9 @@ def verify_need(request: Request, alert_id: int, data: ActionNote, db: Session =
 @limiter.limit("10/minute")
 def alert_staff(request: Request, alert_id: int, data: StaffAlert, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
+    if alert.status not in ("acknowledged", "checking", "staff_alerted"):
+        raise HTTPException(409, "This alert cannot be assigned in its current state")
     if not alert.claimed_by:
         raise HTTPException(409, "Admin must review and claim the alert first")
     contact = db.get(StaffContact, data.staff_id) if data.staff_id else None
@@ -426,7 +695,7 @@ def staff_findings(alert_id: int, data: StaffFindings, db: Session = Depends(get
 @limiter.limit("10/minute")
 def dispatch_medical(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                      admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
     alert.status = "medical_dispatched"
     event(db, alert.id, "medical_dispatched", admin.id, data.note)
     db.commit()
@@ -437,7 +706,7 @@ def dispatch_medical(request: Request, alert_id: int, data: ActionNote, db: Sess
 @limiter.limit("10/minute")
 def resolve_alert(request: Request, alert_id: int, data: ActionNote, db: Session = Depends(get_db),
                   admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
     alert.status = "resolved"
     alert.closed_at = utc_now()
     event(db, alert.id, "resolved", admin.id, data.note)
@@ -449,7 +718,7 @@ def resolve_alert(request: Request, alert_id: int, data: ActionNote, db: Session
 @limiter.limit("10/minute")
 def close_false(request: Request, alert_id: int, data: FalseReport, db: Session = Depends(get_db),
                 admin: User = Depends(require_roles(Role.admin))):
-    alert = admin_alert(db, alert_id)
+    alert = open_alert_for_update(db, alert_id)
     if not alert.claimed_by:
         raise HTTPException(409, "Review the alert before closing it")
     alert.status = "closed_false_report"
@@ -493,3 +762,52 @@ def send_message(request: Request, alert_id: int, data: MessageIn,
     event(db, alert_id, "message_sent", user.id if user else None)
     db.commit()
     return {"status": "sent"}
+
+
+# SSE endpoint for live status updates
+@router.get("/{alert_id}/stream")
+async def alert_stream(
+    alert_id: int,
+    request: Request,
+    x_alert_token: str | None = Header(default=None, alias="X-Alert-Token"),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Server-Sent Events stream for live alert status updates"""
+    alert = db.get(MedicalAlert, alert_id)
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    access_or_403(alert, user, x_alert_token)
+
+    async def event_generator():
+        # Send initial status
+        yield f"data: {json.dumps(alert_view(alert))}\n\n"
+
+        # For now, we'll send a heartbeat every 30 seconds
+        # In a full implementation, this would use Redis pub/sub
+        import asyncio
+        try:
+            while True:
+                await asyncio.sleep(30)
+                if await request.is_disconnected():
+                    break
+                # Refresh alert from DB
+                db_expire = db.expire_all()  # Not needed, just for pattern
+                alert_refreshed = db.get(MedicalAlert, alert_id)
+                if alert_refreshed:
+                    yield f"data: {json.dumps(alert_view(alert_refreshed))}\n\n"
+                else:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

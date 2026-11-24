@@ -65,15 +65,6 @@ resource "aws_security_group" "ecs_tasks" {
     description     = "Allow traffic from ALB"
   }
 
-  # Allow inbound from EFS security group (if needed)
-  ingress {
-    from_port       = 2049
-    to_port         = 2049
-    protocol        = "tcp"
-    security_groups = [aws_security_group.efs.id]
-    description     = "Allow NFS from EFS"
-  }
-
   # Allow all outbound
   egress {
     from_port   = 0
@@ -198,33 +189,4 @@ resource "aws_security_group" "efs" {
     Name        = "${var.project_name}-${var.environment}-efs-sg"
     Environment = var.environment
   }
-}
-
-# ============================================================
-# OUTPUTS
-# ============================================================
-
-output "alb_sg_id" {
-  value       = aws_security_group.alb.id
-  description = "ALB Security Group ID"
-}
-
-output "ecs_tasks_sg_id" {
-  value       = aws_security_group.ecs_tasks.id
-  description = "ECS Tasks Security Group ID"
-}
-
-output "rds_sg_id" {
-  value       = aws_security_group.rds.id
-  description = "RDS Security Group ID"
-}
-
-output "elasticache_sg_id" {
-  value       = aws_security_group.elasticache.id
-  description = "ElastiCache Security Group ID"
-}
-
-output "efs_sg_id" {
-  value       = aws_security_group.efs.id
-  description = "EFS Security Group ID"
 }

@@ -77,7 +77,7 @@ module "vpc" {
 
   name = "${var.project_name}-${var.environment}"
 
-  cidr_block = var.vpc_cidr
+  cidr = var.vpc_cidr
 
   azs             = slice(data.aws_availability_zones.available.names, 0, var.az_count)
   private_subnets = var.private_subnet_cidrs
@@ -85,22 +85,15 @@ module "vpc" {
 
   enable_nat_gateway     = true
   single_nat_gateway     = var.environment != "production"
+  one_nat_gateway_per_az = var.environment == "production"
   enable_dns_hostnames   = true
   enable_dns_support     = true
-  enable_classiclink     = false
-  enable_classiclink_dns = false
 
-  # NAT Gateway configuration
-  nat_gateway_elastic_ips = var.environment == "production" ? var.az_count : 1
-
-  # VPC Flow Logs
-  vpc_flow_logs = {
-    cloudwatch = {
-      destination_type = "cloudwatch-logs"
-      log_group_name   = "/aws/vpc/flowlogs/${var.project_name}-${var.environment}"
-      traffic_type     = "ALL"
-    }
-  }
+  enable_flow_log                           = true
+  create_flow_log_cloudwatch_log_group      = true
+  create_flow_log_cloudwatch_iam_role        = true
+  flow_log_traffic_type                     = "ALL"
+  flow_log_cloudwatch_log_group_retention_in_days = 30
 
   # Tags
   tags = {
@@ -353,7 +346,7 @@ resource "aws_elasticache_replication_group" "redis" {
   engine                     = "redis"
   engine_version             = "7.2"
   node_type                  = var.redis_node_type
-  number_cache_clusters      = var.environment == "production" ? 2 : 1
+  num_cache_clusters         = var.environment == "production" ? 2 : 1
   automatic_failover_enabled = var.environment == "production"
   multi_az_enabled           = var.environment == "production"
 
@@ -374,25 +367,17 @@ resource "aws_elasticache_replication_group" "redis" {
 
   # Logging
   log_delivery_configuration {
+    destination      = aws_cloudwatch_log_group.redis_slow.name
     destination_type = "cloudwatch-logs"
     log_format       = "json"
     log_type         = "slow-log"
-    destination_details {
-      cloudwatch_logs {
-        log_group = aws_cloudwatch_log_group.redis_slow.name
-      }
-    }
   }
 
   log_delivery_configuration {
+    destination      = aws_cloudwatch_log_group.redis_engine.name
     destination_type = "cloudwatch-logs"
     log_format       = "json"
     log_type         = "engine-log"
-    destination_details {
-      cloudwatch_logs {
-        log_group = aws_cloudwatch_log_group.redis_engine.name
-      }
-    }
   }
 
   tags = {
@@ -473,22 +458,22 @@ resource "aws_ecr_repository" "api" {
     encryption_type = "AES256"
   }
 
-  lifecycle_policy {
-    policy = jsonencode({
-      rules = [{
-        rulePriority = 1
-        description  = "Keep last 10 images"
-        selection = {
-          tagStatus     = "any"
-          countType     = "imageCountMoreThan"
-          countNumber   = 10
-        }
-        action = {
-          type = "expire"
-        }
-      }]
-    })
-  }
+}
+
+resource "aws_ecr_lifecycle_policy" "api" {
+  repository = aws_ecr_repository.api.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -806,10 +791,6 @@ resource "aws_secretsmanager_secret" "jwt_secret" {
   name        = "emergency-response/jwt-secret"
   description = "JWT signing secret for emergency-response application"
   kms_key_id  = aws_kms_key.secrets.arn
-
-  rotation_rules {
-    automatically_after_days = 90
-  }
 }
 
 resource "aws_secretsmanager_secret" "database_url" {

@@ -19,6 +19,15 @@ def test_home():
     assert "Get medical help" in response.text
 
 
+def test_installable_app_routes():
+    manifest = client.get("/manifest.json")
+    assert manifest.status_code == 200
+    assert manifest.json()["start_url"] == "./"
+    worker = client.get("/sw.js")
+    assert worker.status_code == 200
+    assert "javascript" in worker.headers["content-type"]
+
+
 def test_metrics():
     response = client.get("/metrics")
     assert response.status_code == 200

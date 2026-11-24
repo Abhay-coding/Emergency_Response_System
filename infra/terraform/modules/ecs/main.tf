@@ -81,6 +81,7 @@ data "aws_iam_policy_document" "task_role" {
       "arn:aws:sns:${var.aws_region}:${var.account_id}:emergency-response-*",
     ]
   }
+}
 
 resource "aws_ecs_task_definition" "main" {
   family                   = "${var.project_name}-${var.environment}-api"
@@ -104,6 +105,11 @@ resource "aws_ecs_task_definition" "main" {
         containerPort = 8000
         protocol      = "tcp"
       }]
+      mountPoints = [{
+        sourceVolume  = "uploads"
+        containerPath = "/app/uploads"
+        readOnly      = false
+      }]
       environment = [
         for key, value in var.environment_variables :
         { name = key, value = value }
@@ -115,7 +121,7 @@ resource "aws_ecs_task_definition" "main" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          "awslogs-group"         = var.log_group_name
+          "awslogs-group"         = aws_cloudwatch_log_group.container.name
           "awslogs-region"        = var.aws_region
           "awslogs-stream-prefix" = "ecs"
         }
@@ -137,18 +143,17 @@ resource "aws_ecs_task_definition" "main" {
     }
   ])
 
-  volumes = [{
+  volume {
     name = "uploads"
-    efsVolumeConfiguration = {
-      fileSystemId          = var.efs_file_system_id
-      rootDirectory         = "/uploads"
-      transitEncryption     = "ENABLED"
-      authorizationConfig = {
-        accessPointId = var.efs_access_point_id
-        iam           = "ENABLED"
+    efs_volume_configuration {
+      file_system_id     = var.efs_file_system_id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = var.efs_access_point_id
+        iam             = "ENABLED"
       }
     }
-  }]
+  }
 
   tags = {
     Name        = "${var.project_name}-${var.environment}-api-task"
@@ -184,13 +189,11 @@ resource "aws_ecs_service" "main" {
     type = "ECS"
   }
 
-  deployment_configuration {
-    maximum_percent         = 200
-    minimum_healthy_percent = 50
-    deployment_circuit_breaker {
-      enable   = true
-      rollback = true
-    }
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 50
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
   }
 
   enable_ecs_managed_tags = true
@@ -246,33 +249,4 @@ resource "aws_appautoscaling_policy" "memory_scale_up" {
     scale_in_cooldown  = 300
     scale_out_cooldown = 300
   }
-}
-
-# ============================================================
-# OUTPUTS
-# ============================================================
-
-output "cluster_name" {
-  value       = aws_ecs_cluster.main.name
-  description = "ECS Cluster Name"
-}
-
-output "cluster_arn" {
-  value       = aws_ecs_cluster.main.arn
-  description = "ECS Cluster ARN"
-}
-
-output "service_name" {
-  value       = aws_ecs_service.main.name
-  description = "ECS Service Name"
-}
-
-output "service_arn" {
-  value       = aws_ecs_service.main.arn
-  description = "ECS Service ARN"
-}
-
-output "task_definition_arn" {
-  value       = aws_ecs_task_definition.main.arn
-  description = "Task Definition ARN"
 }

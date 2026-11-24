@@ -172,39 +172,5 @@ resource "aws_wafv2_web_acl" "main" {
 resource "aws_wafv2_web_acl_association" "alb" {
   count = var.enable_waf ? 1 : 0
   resource_arn = aws_lb.main.arn
-  web_acl_arn  = aws_wafv2_web_acl.main.arn
-}
-
-# ============================================================
-# OUTPUTS
-# ============================================================
-
-output "alb_arn" {
-  value       = aws_lb.main.arn
-  description = "ALB ARN"
-}
-
-output "alb_dns_name" {
-  value       = aws_lb.main.dns_name
-  description = "ALB DNS Name"
-}
-
-output "alb_zone_id" {
-  value       = aws_lb.main.zone_id
-  description = "ALB Zone ID"
-}
-
-output "target_group_arns" {
-  value       = [aws_lb_target_group.api.arn]
-  description = "Target Group ARNs"
-}
-
-output "http_listener_arn" {
-  value       = aws_lb_listener.http.arn
-  description = "HTTP Listener ARN"
-}
-
-output "https_listener_arn" {
-  value       = aws_lb_listener.https.arn
-  description = "HTTPS Listener ARN"
+  web_acl_arn  = aws_wafv2_web_acl.main[count.index].arn
 }

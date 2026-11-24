@@ -82,8 +82,10 @@ def test_admin_queue_does_not_expose_guest_tokens_or_internal_keys():
 def test_public_config_only_advertises_isolated_demo_repository():
     repo=FakeRepo()
     assert data_api_demo.public_config(repo)['demo_mode'] is False
+    assert data_api_demo.public_config(repo)['alert_history'] is False
     repo.isolated_demo_mode=True
     assert data_api_demo.public_config(repo)['demo_mode'] is True
+    assert data_api_demo.public_config(repo)['alert_history'] is True
 
 
 def test_reset_alert_has_distinct_missing_status_and_bad_token_stays_forbidden():
